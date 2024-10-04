@@ -7,8 +7,8 @@
 # Description:	This script remove from media files unnecessary audio and		#
 #	subtitles also converts not supported audio codecs and renames files.		#
 # Author: [remigijus.gaigalas@gmail.com]										#
-# Date: [2024-08-11]															#
-# Version: [0.7]																#
+# Date: [2024-09-28]															#
+# Version: [0.7.2]																#
 #################################################################################
 
 
@@ -36,7 +36,7 @@ execution_time=0 # Time to complete FFmpeg command
 # Function to check if a file has a valid extension.
 is_valid_file() {
 #	echo "$1"
-	local file_extension=".${1##*.}"
+	file_extension=".${1##*.}"
 	for ext in $EXTENSIONS; do
 		if [ "$ext" = "$file_extension" ]; then
 			return 0 # Valid extension found.
@@ -55,8 +55,8 @@ fi
 
 # Function to convert bytes to human readable form.
 human_readable_size(){
-	local SIZE="$1" # input size in bytes
-	local UNITS="B KiB MiB GiB TiB PiB" # list of unit prefixes
+	SIZE="$1" # input size in bytes
+	UNITS="B KiB MiB GiB TiB PiB" # list of unit prefixes
 
 	# Iterate through the units, starting from the smallest and working our way up
 	for UNIT in $UNITS; do
@@ -77,30 +77,30 @@ human_readable_size(){
 
 # Function to convert a file.
 convert_file(){
-	local source="$1"
-	local destination="$2"
-	local destination_directory="$2"
+	source="$1"
+	destination="$2"
+	destination_directory="$2"
 
 	if is_valid_file "$source"; then
 		#echo "Converting ${source#$source_directory/} Please wait ..."
 		# Make destination file name from destination path and source file name.
-		local extension=$(echo "$source" | awk -F. '{print $NF}')
+		extension=$(echo "$source" | awk -F. '{print $NF}')
 		source_file_name=$(basename "$source")
 		source_file_name="${source_file_name%.*}" # Without extension.
-		local pattern="([Ss])([0-9]+)[._ -]?([Ee])([0-9]+)"
+		pattern="([Ss])([0-9]+)[._ -]?([Ee])([0-9]+)"
 		# Regular expression to match various TV series patterns
-		local series_pattern=$(echo "$source_file_name" | grep -Eo "$pattern")
+		series_pattern=$(echo "$source_file_name" | grep -Eo "$pattern")
 
 		if [ -n "$series_pattern" ]; then
 			normalized_series=""
 			for pattern in $series_pattern;do
 				# If TV series pattern found, normalize it to the "S01E01" format.
-				local season=$(echo "$pattern" | sed -E 's/[^0-9]*([0-9]+)[^0-9]+([0-9]+)/\1/')
-				local episode=$(echo "$pattern" | sed -E 's/[^0-9]*([0-9]+)[^0-9]+([0-9]+)/\2/')
+				season=$(echo "$pattern" | sed -E 's/[^0-9]*([0-9]+)[^0-9]+([0-9]+)/\1/')
+				episode=$(echo "$pattern" | sed -E 's/[^0-9]*([0-9]+)[^0-9]+([0-9]+)/\2/')
 				# Remove leading zeros from season and episode variables.
-				local season=$(echo "$season" | sed 's/^0*//')
-				local episode=$(echo "$episode" | sed 's/^0*//')
-				local normalized_series="$(printf "$normalized_series")S$(printf "%02d" "$season")E$(printf "%02d" "$episode")"
+				season=$(echo "$season" | sed 's/^0*//')
+				episode=$(echo "$episode" | sed 's/^0*//')
+				normalized_series="$(printf "$normalized_series")S$(printf "%02d" "$season")E$(printf "%02d" "$episode")"
 			done
 			#echo "DEFAULT_DESTINATION=$DEFAULT_DESTINATION"
 			if [ "$destination" = "$DEFAULT_DESTINATION" ]; then
@@ -121,13 +121,13 @@ convert_file(){
 			fi
 		else
 			# If no TV series pattern found, keep the original string and search movie pattern.
-			local current_year=$(date +%Y)
+			current_year=$(date +%Y)
 
 			# Find all occurrences of years that do not exceed the current year and are greater than or equal to 1900.
-			local valid_years=$(echo "$source_file_name" | grep -Eo "\b(19[0-9]{2}|20[0-$current_year]{1}[0-9]{1})\b" | awk -v current_year="$current_year" '{ if ($1 <= current_year) print $1 }')
+			valid_years=$(echo "$source_file_name" | grep -Eo "\b(19[0-9]{2}|20[0-$current_year]{1}[0-9]{1})\b" | awk -v current_year="$current_year" '{ if ($1 <= current_year) print $1 }')
 
 			# Get the last valid year from the file name.
-			local last_year=$(echo "$valid_years" | tail -n 1)
+			last_year=$(echo "$valid_years" | tail -n 1)
 			if [ -n "$last_year" ]; then
 				# Truncate the file name after the last occurrence of the year.
 				if echo "$source_file_name" | grep -q "(($last_year))"; then
@@ -150,15 +150,22 @@ convert_file(){
 		destination=$(echo "$destination" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//') # Remove both leading and trailing spaces.
 		destination=$(echo "$destination" | sed 's#\(.*\) /#\1/#') # Replace last " /" to "/" for TV series directory creation.
 		# Destination path + normalized file name + source extension.
+		# Without video save file as mka file.
 		if [ -n "$NOVIDEO_FLAG" ]; then
-			destination="$destination_directory$destination(no_video).$extension"
+			# Save to source folder if no destination is set.
+			if [ "$destination_directory" -ef "$DEFAULT_DESTINATION" ]; then
+				destination="$source_directory/$source_file_name.mka"
+			else destination="$destination_directory$destination.mka" #(no_video).$extension"
+			fi
 		else
 			destination="$destination_directory$destination.$extension"
 		fi
 
-		echo
-		echo "Source file: $source"
-		echo "Destination file: $destination"
+		if [ -z "$TEST_FLAG" ]; then
+			echo
+			echo "Source file: $source"
+			echo "Destination file: $destination"
+		fi
 
 		# Check if source and destination are the same.
 		if [ "$source" -ef "$destination" ] && [ -z "$TEST_FLAG" ]; then
@@ -177,13 +184,13 @@ convert_file(){
 				return 1
 			fi
 		file_streams=$(echo "$file_streams" | jq -r '[.streams[]|{index: .index, codec_name: .codec_name, codec_type: .codec_type, language: .tags.language, title: .tags.title}]')
-		if [ -n "$file_streams" ]; then
+		if [ -n "$file_streams" ] && [ -z "$TEST_FLAG" ]; then
 			echo "$file_streams" | jq -r '[ "Id:", "Codec:", "Type:", "Language:", "Title:"], (.[] | {index: .index, codec_name: .codec_name, codec_type: .codec_type, language: .language, title: .title} | [.index, .codec_name, .codec_type, .language, .title]) | @csv' | awk -F ',' '{printf "%-5s %-20s %-11s %-11s %-0s\n", $1, $2, $3, $4, $5}' 
 		fi
 
 		# Select audio tracks based on preferred and fallback languages.
-		local selected_audio_tracks=""
-		local audio_language=""
+		selected_audio_tracks=""
+		audio_language=""
 		for language in $LANGUAGES; do
 			audio_tracks="$(echo "$file_streams" | jq -r --arg lang "$language" '.[] | select(.codec_type == "audio" and .language == $lang) | .index')"
 			if [ -n "$audio_tracks" ]; then
@@ -198,27 +205,26 @@ convert_file(){
 			selected_audio_tracks="$(echo $file_streams | jq -r '.[] | select(.codec_type == "audio") | .index')"
 		fi
 
-		#add commentary audio only if differ than audio_language
+		#add commentary audio
 		#ffprobe -v error -show_entries stream=index:stream_tags=title -of default=noprint_wrappers=1 "$source" | grep -B 1 "Commentary"
-		#echo "selected_audio_tracks=$selected_audio_tracks"
 		audio_commentary_index=""
-		audio_commentary_index=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" and .title == "Commentary") | .index')
+		audio_commentary_index=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" and .title != null)' | jq 'select(.title | contains("Commentary")).index')
 
 		#echo "audio_commentary_index=$audio_commentary_index"
 		# Sort and find unique indexes in audio_commentary_index that are not in audio_tracks
 		if [ -n "$audio_commentary_index" ]; then
 			selected_audio_tracks=$(echo "$selected_audio_tracks\n$audio_commentary_index" | sort -n | uniq)
 		fi
-		if [ -n "$selected_audio_tracks" ]; then
+		if [ -n "$selected_audio_tracks" ] && [ -z "$TEST_FLAG" ]; then
 			echo "selected_audio_tracks:"
 			echo "$selected_audio_tracks"
 		fi
 
 		# Run ffprobe to get information about the video streams.
-		local video_codecs=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video") | .codec_name')
+		video_codecs=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video") | .codec_name')
 
 		# Check if any video codec is supported.
-		local video_codec_supported=""
+		video_codec_supported=""
 		for video_codec in $video_codecs; do
 			# Check if the codec is in the SUPPORTED_VIDEO_CODECS array.
 			for supported_video_codec in $SUPPORTED_VIDEO_CODECS; do
@@ -230,7 +236,7 @@ convert_file(){
 		done
 
 		# Select subtitles.
-		local subtitle_language=""
+		subtitle_language=""
 		for language in $LANGUAGES; do
 			subtitle_track=$(echo "$file_streams" | jq -r --arg lang "$language" '.[] | select(.codec_type == "subtitle" and .language == $lang) | .index')
 			if [ -n "$subtitle_track" ]; then
@@ -249,7 +255,7 @@ convert_file(){
 		subtitle_commentary_index=""
 		subtitle_commentary_index=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "subtitle" and .title == "Commentary") | .index')
 		# Sort and find unique indexes in audio_commentary_index that are not in audio_tracks
-		if [ -n "$subtitle_commentary_index" ]; then
+		if [ -n "$subtitle_commentary_index" ] && [ -z "$TEST_FLAG" ]; then
 			subtitle_track=$(echo "$subtitle_track\n$subtitle_commentary_index" | sort -n | uniq)
 			echo "subtitle_commentary_index:"
 			echo "$subtitle_commentary_index"
@@ -261,7 +267,7 @@ convert_file(){
 				subtitle_track=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "subtitle") | .index')
 			fi
 		fi
-		if [ -n "$subtitle_track" ]; then
+		if [ -n "$subtitle_track" ] && [ -z "$TEST_FLAG" ]; then
 			echo "selected subtitles:"
 			echo "$subtitle_track"
 			#echo "subtitle_language=$subtitle_language"
@@ -285,9 +291,11 @@ convert_file(){
 		done
 
 		# Add audio tracks.
-		local audio_track_index=0
+		audio_track_index=0
+		# Count how much audio and subtitles tracks will be copied without conversation.
+		not_changed_tracks=0
 		for audio_track in $selected_audio_tracks; do
-			local audio_codec="$(echo "$file_streams" | jq -r --arg audio_track "$audio_track" '.[$audio_track|tonumber].codec_name')"
+			audio_codec="$(echo "$file_streams" | jq -r --arg audio_track "$audio_track" '.[$audio_track|tonumber].codec_name')"
 
 			# Check if a audio codec is supported.
 			audio_codec_supported=""
@@ -298,11 +306,8 @@ convert_file(){
 				fi
 			done
 
-			# Count how much audio and subtitles tracks will be copied without conversation.
-			not_changed_tracks=0
-
 			# Decide convert or copy audio track.
-			if [ -n "$video_codec_supported" ] || [ -z "$video_codecs" ]; then
+			if [ -n "$video_codec_supported" ] || [ -z "$video_codecs" ] || [ -n "$NOVIDEO_FLAG" ]; then
 				if [ -n "$audio_codec_supported" ]; then
 					ffmpeg_command="$ffmpeg_command -c:a:$audio_track_index copy"
 					not_changed_tracks=$(( not_changed_tracks + 1 ))
@@ -335,10 +340,15 @@ convert_file(){
 		if [ "$not_changed_tracks" -eq "$audio_and_subtitle_count" ]; then
 
 			# Check if the choice is already set
-			if [ -z "$copy_file_choice" ] && [ -z "$TEST_FLAG" ] ; then
+			if [ -z "$copy_file_choice" ] && [ -z "$TEST_FLAG" ] && [ -z "$NOVIDEO_FLAG" ]; then
 				# Prompt the user for input if choice is not set.
 				read -p "Do not need convert file. Do you want to copy it to ($destination)? Choice is permanent for all files! (y/n).: " choice_copy_file
 				copy_file_choice="$choice_copy_file"
+			fi
+
+			# Always copy audio if output only audio
+			if [ -n "$NOVIDEO_FLAG" ]; then 
+				copy_file_choice="y"
 			fi
 
 			# Use the stored choice.
@@ -351,7 +361,7 @@ convert_file(){
 							ffmpeg_command="ffmpeg -xerror -err_detect explode -flags -global_header -hide_banner -i \"$source\" -c copy -metadata:s:v title=\"\" \"$destination\""
 						fi
 			else
-				local error="Skipping (${1#"$source_directory"/}) because do not need to convert this file."
+				error="Skipping (${1#"$source_directory"/}) because do not need to convert this file."
 				errors="$errors$error\n"
 				echo "$error"
 				return 1
@@ -373,7 +383,7 @@ convert_file(){
 					mkdir -p "$directory"
 					echo "Created destination ($directory) directory."
 				else
-					local error="Error: FFmpeg cannot create file in non-existing directory. Skipping (${source#"$source_directory"/}) file."
+					error="Error: FFmpeg cannot create file in non-existing directory. Skipping (${source#"$source_directory"/}) file."
 					errors="$errors$error\n"
 					echo "$error"
 					return 1
@@ -381,7 +391,7 @@ convert_file(){
 		fi
 
 		# Record the FFmpeg start time.
-		local start_time=$(date +%s)
+		start_time=$(date +%s)
 
 		echo "$ffmpeg_command"
 
@@ -394,7 +404,7 @@ convert_file(){
 				# Record the FFmpeg end time.
 				end_time=$(date +%s)
 				execution_time=$((end_time - start_time))
-				local error="Error: ($ffmpeg_command) \n"
+				error="Error: ($ffmpeg_command) \n"
 				errors="$errors$error"
 				echo "$error"
 				return 1
@@ -411,7 +421,7 @@ convert_file(){
 		# Calculate the difference in seconds.
 		execution_time=$((end_time - start_time))
 		# Format the execution time using date command.
-		local formatted_time=$(date -u -d @"$execution_time" +"%T")
+		formatted_time=$(date -u -d @"$execution_time" +"%T")
 		# Output time in format hours:minutes:seconds how long took function and how long took whole script to finish.
 
 		# Compare source and destination files after conversation.
@@ -426,15 +436,15 @@ convert_file(){
 
 		# Check if the destination file is bigger than the source file.
 		if [ "$destination_size" -gt "$source_size" ]; then
-			local error="Error: Destination file (${destination#"$input_destination"}) is bigger than source file (${source#"$source_directory"/})."
+			error="Error: Destination file (${destination#"$input_destination"}) is bigger than source file (${source#"$source_directory"/})."
 			errors="$errors$error\n"
 			return 1
 		fi
 
 		# Check if the destination file is less than 10% of the source file size.
-		local ten_percent=$((source_size / 10))
+		ten_percent=$((source_size / 10))
 		if [ "$destination_size" -lt "$ten_percent" ] || [ "$destination_size" -eq 0 ] && [ -z "$NOVIDEO_FLAG" ]; then
-			local error="Error: Destination file (${destination#"$input_destination"}) is less than 10% of the source file. Deleting it."
+			error="Error: Destination file (${destination#"$input_destination"}) is less than 10% of the source file. Deleting it."
 			errors="$errors$error\n"
 			echo "$error"
 
@@ -448,8 +458,8 @@ convert_file(){
 		# Make destination file creation date same as source.
 		if [ -f "$destination" ]; then
 			touch -r "$source" "$destination"
-		else
-			local error="Error: Destination file (${destination#"$input_destination"}) does not exist."
+		else 
+			error="Error: Destination file (${destination#"$input_destination"}) does not exist."
 			errors="$errors$error\n"
 			echo "$error"
 			return 1
@@ -462,9 +472,9 @@ convert_file(){
 		# Register all successful fmmpeg commands.
 		messages_without_mistakes="$messages_without_mistakes$ffmpeg_command\n"
 		# Output saved disk size.
-		local saved_size="Saved: $(human_readable_size $size_difference) and it took $formatted_time to do so."
+		saved_size="Saved: $(human_readable_size $size_difference) and it took $formatted_time to do so."
 		messages_without_mistakes="$messages_without_mistakes$saved_size\n\n"
-
+		echo "$saved_size"
 		# Update the total difference.
 		total_diff=$((total_diff + size_difference))
 	fi
@@ -473,11 +483,13 @@ convert_file(){
 # Function to check a file for errors.
 check_file(){
 	if is_valid_file "$1"; then
-		local source_file_name="${1#"$source_directory"/}"
-		echo "Checking ($source_file_name) for errors"
+		source_file_name="${1#"$source_directory"/}"
+		if [ -z "$TEST_FLAG" ]; then
+			echo "Checking ($source_file_name) for errors"
+		fi
 
 		# Record the FFmpeg start time.
-		local start_time=$(date +%s)
+		start_time=$(date +%s)
 
 		#eval ffmpeg -err_detect explode -v error -hide_banner -i \"$1\" -c copy -f null - 2>&1 >/dev/null
 		# Run ffmpeg and capture its output and exit status
@@ -487,12 +499,13 @@ check_file(){
 		#ffmpeg -xerror -err_detect explode -hide_banner -i "$1" -f null -
 		#ffmpeg -hwaccels -hide_banner #parodo gpu akseleracijas
 		#ffmpeg -hwaccel vaapi -vaapi_device /dev/dri/renderD128 -xerror -err_detect explode -hide_banner -i "$1" -f null - #dirba 10x lėčiau
-
+		# ffmpeg_output nerodo statuso bet pagauna daugiau klaidų
 		#echo "ffmpeg -benchmark -hwaccel vdpau -xerror -err_detect explode -v error -i \"$1\" -f null - 2>&1"
 		#ffmpeg_output=$(ffmpeg -benchmark -hwaccel vdpau -xerror -err_detect explode -v error -i "$1" -f null - 2>&1)
 
 		#Rodo ffmpeg statusą bet nepagauna visų klaidų
-		ffmpeg_command="ffmpeg -benchmark -hwaccel vaapi -xerror -err_detect explode -hide_banner -i \"$1\" -f null -"
+		ffmpeg_command="ffmpeg -benchmark -hwaccel vdpau -xerror -err_detect explode -hide_banner -i \"$1\" -f null -"
+		#ffmpeg_command="ffmpeg -benchmark -hwaccel cuda -xerror -err_detect explode -hide_banner -i \"$1\" -f null -"
 		echo "$ffmpeg_command"
 
 		if [ -z "$TEST_FLAG" ]; then
@@ -505,8 +518,8 @@ check_file(){
 				end_time=$(date +%s)
 				execution_time=$((end_time - start_time))
 				formatted_time=$(date -u -d @"$execution_time" +"%T")
-				local error="Error: in ($source_file_name). Check took $formatted_time to do so."
-				errors="$errors$error\n"
+				error="Error: in ($source_file_name). Check took $formatted_time to do so."
+				errors="$errors$source_file_name\n"
 				echo "$error"
 				return 1
 			else
@@ -518,17 +531,22 @@ check_file(){
 				fi
 				echo "File is OK: ($source_file_name). Check took $formatted_time to do so."
 				messages_without_mistakes="$messages_without_mistakes$source_file_name\n"
+				return 0
 			fi
 		else
+			# Dry run. Do nothing.
 			end_time=$(date +%s)
 			execution_time=$((end_time - start_time))
 			return 1
 		fi
 
+		end_time=$(date +%s)
+		execution_time=$((end_time - start_time))
 		# Format the execution time using date command.
 		formatted_time=$(date -u -d @"$execution_time" +"%T")
 		# Output time in format hours:minutes:seconds how long took function and how long took whole script to finish.
 
+		
 		# Check if ffmpeg produced any output (indicating an error).
 		if [ -n "$ffmpeg_output" ]; then
 		# Check if ffmpeg exit code not 0 (indicating an error).
@@ -548,7 +566,7 @@ check_file(){
 
 # Function to process files in a directory recursively.
 process_directory() {
-	local source="$1"
+	source="$1"
 
 	# Loop through files and subfolders in the folder.
 	for entry in "$source"/*; do
@@ -593,7 +611,7 @@ script_start_time=$(date +%s)
 
 # Check files for errors
 CHECK_FLAG=""
-# Ouput file without video
+# Output only audio
 NOVIDEO_FLAG=""
 # Dry run conversation
 TEST_FLAG=""
@@ -618,8 +636,8 @@ while [ "$1" ]; do
 			echo "  $(basename "$0")			# Use default source and destination."
 			echo "  $(basename "$0") source		# Use source as specified."
 			echo "  $(basename "$0") -c source		# Check specified source for errors."
-			echo "  $(basename "$0") -v source		# Do not add video to output file."	
-			echo "  $(basename "$0") -t source		# Dry run without actual conversation."	
+			echo "  $(basename "$0") -v source		# Do not add video to output file."
+			echo "  $(basename "$0") -t source		# Dry run without actual conversation."
 			echo "  $(basename "$0") source destination	# Use specified source and destination."
 			exit 0
 			;;
@@ -680,6 +698,7 @@ if [ -f "$source" ]; then
 		# Convert files
 		convert_file "$source" "$destination"
 	fi
+return 0 # Exit without messages output
 # If source is directory then remember user file paths. and remove "/" from source.
 elif [ -d "$source" ]; then
 
@@ -701,15 +720,20 @@ else
 fi
 
 # Messages output.
-if [ -n "$messages_without_mistakes" ] || [ -n "$errors" ] && [ -z "$TEST_FLAG" ]; then
-echo "
-Procesed files in ($source_directory/)
-"
+if [ -n "$messages_without_mistakes" ] || [ -n "$errors" ]; then
+	echo
+	echo "Procesed files in directory $source_directory/"
 fi
 
 # Output successful ffmpeg commands.
 if [ -n "$messages_without_mistakes" ]; then
-	echo -e "$messages_without_mistakes"
+	echo "$messages_without_mistakes"
+fi
+
+# Output files with errors.
+if [ -n "$errors" ] && [ -z "$TEST_FLAG" ] ; then
+	echo
+	echo "Files with errors is:\n$errors"
 fi
 
 # Record the end time.
@@ -718,23 +742,13 @@ script_end_time=$(date +%s)
 # Calculate the difference in seconds.
 script_execution_time=$((script_end_time - script_start_time))
 
-# Total output when processed more than one file.
-if [ "$size_difference" -lt "$total_diff" ]; then
+# Format the execution time using date command.
+formatted_time=$(date -u -d @"$script_execution_time" +"%T")
 
-	# Format the execution time using date command.
-	formatted_time=$(date -u -d @"$script_execution_time" +"%T")
-
-	if [ -n "$CHECK_FLAG" ]; then
-		echo "All files check complete in $formatted_time"
-	elif [ -n "$TEST_FLAG" ]; then
-		echo "Script run $formatted_time."
-	else
-		echo "Total saved: $(human_readable_size $total_diff) and it took $formatted_time to do so."
-	fi
-fi
-
-# Output files with errors.
-if [ -n "$errors" ] && [ -z "$TEST_FLAG" ] ; then
-	echo
-	echo -e "Files with errors is:\n$errors"
+if [ -n "$TEST_FLAG" ]; then
+	echo "Dry run took $formatted_time."
+elif [ -n "$CHECK_FLAG" ]; then
+	echo "All files check complete in $formatted_time"
+else
+	echo "Total saved: $(human_readable_size $total_diff) and it took $formatted_time to do so."
 fi
