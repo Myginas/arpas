@@ -491,6 +491,8 @@ convert_file(){
 	# Do not prompt to overwrite existing files.
 	if [ -n "$OVERWRITE_FLAG" ]; then
 		ffmpeg_command="$ffmpeg_command -y"
+  elif [ -n "SKIP_FLAG" ]; then
+  ffmpeg_command="$ffmpeg_command -n"
 	fi
 
 	# Finish of creating ffmpeg command.
