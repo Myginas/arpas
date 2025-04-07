@@ -2,9 +2,8 @@
 #################################################################################
 # Description:	This script remove unnecessary audio and subtitles from media	#
 #				files. Converts not supported audio codecs. Renames files.		#
-# Date: [2021-02-26]															#
-# Version: [0.9] Add kodi .nfo supoort, Add audio track selected				#
-# Fix file rename.																#
+# Date: [2025-04-06]															#
+# Version: [1.0]																#
 #################################################################################
 
 # Enable debugging mode.
@@ -30,7 +29,7 @@ DEFAULT_MOVIE_DESTINATION="/mnt/Duomenys/Matyti Filmai/" # Default destination f
 DEFAULT_TV_SHOWS_DESTINATION="/mnt/Duomenys/Matyti Filmai/Serijalai/" # Default TV series directory. Used when not set destination.
 LANGUAGES="lit eng rus"	# Preferred and fallback languages. Script chooses languages from left to right.
 CONVERT_AUDIO_CODEC="libvorbis" # Audio codec to convert unsupported codecs.
-EXTENSIONS=".mkv .avi .mka .mp4 .m2ts" # Script supported file extensions.
+EXTENSIONS=".mkv .avi .mka .mp4 .m2ts .ts" # Script supported file extensions.
 SUPPORTED_VIDEO_CODECS="h264 hevc av1 vp9 vp8" # Convert audio with these video codecs.
 SUPPORTED_AUDIO_CODECS="vorbis aac mp3 opus flac" # Do not convert audio with these audio codecs.
 
@@ -40,7 +39,6 @@ total_size_difference=0 # Global variable to keep track of total file size diffe
 errors="" # Global variable to keep track files with conversation errors.
 messages_without_mistakes="" # Global variable to keep track files without conversation errors.
 size_difference=0 # Difference in bytes between source and destination files.
-#create_directory_choice="" # Store the user's choice of directory creation.
 ffmpeg_run_time=0 # Time to complete FFmpeg command.
 terminal_columns=80 # Terminal text width.
 audio_track_user_choice="" # User chosen audio tracks list.
@@ -48,13 +46,13 @@ OVERWRITE_FLAG="" # Overwrite files.
 CHECK_FLAG="" # Check files for errors.
 NO_VIDEO_FLAG="" # Output only audio and subtitles.
 TEST_FLAG="" # Dry run conversation.
-AUDIO_FLAG="" # Select only prefered audio tracks.
+AUDIO_FLAG="" # Select only preferred audio tracks.
 SKIP_FLAG="" # Do not convert files if no changes will be made to file exept renaming and copying to destination.
 
 # Function to store error and output to screen.
 error() {
 	errors="$errors$1\n"
-	printf "\033[31mError: $1\033[0m\n"
+	printf "\033[01;31mError: $1\033[0m\n"
 }
 
 # Function to convert bytes to human readable form.
@@ -139,8 +137,8 @@ convert_file(){
 
 		# Check if $renamed_file_name starts with the series pattern.
 		if echo "$renamed_file_name" | grep -q "^$series_pattern"; then
-			# Change destination to renamed_file_name.
-			destination="$renamed_file_name"
+			# Replace series patern to normalized series of renamed file
+			destination=$(echo "$renamed_file_name" | sed "s/$series_pattern/$normalized_series/g")
 		else
 			# Trim everything after TV series pattern.
 			destination=$(echo "$renamed_file_name" | sed "s/$series_pattern.*//")
@@ -204,9 +202,10 @@ convert_file(){
 			nfo_flag=""
 		fi
 
+#TODO: rename destination_subfolder to destination_sub_folder
 		# Rename parent folder if it same as file name.
 		if [ -n "$nfo_flag" ];then 
-			# if destination_subfolder != source file name and destination_subfolder != destination then add subfolder.
+			# if destination_sub_folder != source file name and destination_sub_folder != destination then add sub folder.
 			if [ "$destination_subfolder" != "$source_file_name" ]; then
 				if [ "$destination_subfolder" != "$destination" ]; then
 					destination_directory="$destination_directory$destination/"
@@ -491,8 +490,9 @@ convert_file(){
 	# Do not prompt to overwrite existing files.
 	if [ -n "$OVERWRITE_FLAG" ]; then
 		ffmpeg_command="$ffmpeg_command -y"
-  elif [ -n "SKIP_FLAG" ]; then
-  ffmpeg_command="$ffmpeg_command -n"
+	# Do not overwrite existing files when skipping files.
+	elif [ -n "$SKIP_FLAG" ]; then
+		ffmpeg_command="$ffmpeg_command -n"
 	fi
 
 	# Finish of creating ffmpeg command.
@@ -504,7 +504,7 @@ convert_file(){
 		create_directory_command="mkdir -p \"$directory\""
 		# Create directory and check for errors.
 		if ! eval "$create_directory_command";then
-			error "FFmpeg cannot create file in non-existing directory. Skipping (${source#"$source_directory"}) file."
+			error "FFmpeg cannot create file in not existing directory. Skipping (${source#"$source_directory"}) file."
 			return 1
 		fi
 	fi
@@ -515,7 +515,7 @@ convert_file(){
 	selected_destination_tracks="$selected_destination_tracks $selected_audio_tracks $subtitle_tracks"
 	json_query_command=""
 	for id in $selected_destination_tracks; do
-	# Append selected index'es to jq command.
+	# Append selected indexes to jq command.
 		if [ -z "$json_query_command" ]; then
 			json_query_command="$id"
 		else 
@@ -551,124 +551,126 @@ convert_file(){
 			return 1
 		fi
 
-		# Import xml elements from destination nfo file to source nfo file.
-				# Movie nfo file path.
-
-		# TV show nfo file path.
-		if [ -f "$source_directory""tvshow.nfo" ]; then
-			nfo_flag=true
-		fi
-
-		if [ -n "$nfo_flag" ]; then
-			for source_nfo_file in .nfo movie.nfo tvshow.nfo;do
-				
-				# Create source and destination nfo file path.
-				if [ "$source_nfo_file" = ".nfo" ]; then 
-					destination_nfo_file="${destination%.*}$source_nfo_file"
-					source_nfo_file="${source%.*}$source_nfo_file"
-				else
-					destination_nfo_file="$destination_directory$source_nfo_file"
-					source_nfo_file="$source_directory$source_nfo_file"
-				fi
-
-				# Chek if exist source nfo file.
-				if [ -f "$source_nfo_file" ]; then 
-					# Delete empty xml <element></element> elements from source_nfo_file file.
-					sed -i '/^\s*<[^>]*>\s*<\/[^>]*>\s*$/d' "$source_nfo_file"
-					# Delete empty xml <element/> elements from source_nfo_file file.
-					sed -i '/^\s*<[^>]*\/>\s*$/d' "$source_nfo_file"
-					
-					if [ -f "$destination_nfo_file" ]; then
-						# Get XML elements tabulator.
-						xml_tabulator=$(grep -o '^ *' "$source_nfo_file" | head -n 1)
-
-						for xml_element in "userrating" "watched" "playcount" "dateadded" "lastplayed"; do
-							# Extract the value from the destination_nfo_file XML file.
-							destination_xml_value=$(grep "<$xml_element>" "$destination_nfo_file" | sed -e "s/.*<$xml_element>\([^<]*\)<\/$xml_element>.*/\1/")
-							# Check if a valid value was extracted.
-							if [ -n "$destination_xml_value" ]; then
-								source_xml_value=$(grep "<$xml_element>" "$source_nfo_file" | sed -e "s/.*<$xml_element>\([^<]*\)<\/$xml_element>.*/\1/")
-								if [ -n "$source_xml_value" ]; then
-									# Update the source file only if the destination value is different from the source value.
-									if [ "$destination_xml_value" != "$source_xml_value" ]; then
-										sed -i "s/<$xml_element>[^<]*<\/$xml_element>/<$xml_element>$destination_xml_value<\/$xml_element>/" "$source_nfo_file"
-										echo "$xml_tabulator<$xml_element> updated from $source_xml_value to $destination_xml_value"
-									fi
-								else
-									# Insert the element into the appropriate parent tag in the souce file (movie, tvshow, epsodedetail).
-									for xml_root_element in "movie" "episodedetails" "tvshow"; do
-										if ! grep -q "<$xml_root_element>" "$source_nfo_file"; then
-											continue
-										fi
-
-										# Insert line before closing xml root element "</movie>, </episodedetails> or </tvshow>".
-										if [ -n "$xml_root_element" ];then 
-											sed -i "/<\/$xml_root_element>/ i\\$xml_tabulator<$xml_element>$destination_xml_value</$xml_element>" "$source_nfo_file"
-											echo "$xml_tabulator<$xml_element> value $destination_xml_value inserted into <$xml_root_element>"
-										fi
-										break
-									done
-								fi
-							fi
-						done
-					fi
-				fi
-			done
-
-			# move all kodi files that names begin same as file name.
-			kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$source_file_name*" -not -name "$source_file_name.$extension")
-			if [ -n "$kodi_files" ]; then
-				#IFS` determines which characters separate the fields in each line of data.
-				SAVE_IFS=$IFS
-				IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
-
-				for kodi_file in $kodi_files; do
-					# Extract the relative path and construct destination path
-					kodi_file_destination="${kodi_file#"${source%.*}"}"
-					kodi_file_destination="${destination%.*}$kodi_file_destination"
-					move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
-					echo "$move_file_command"
-					if ! eval "$move_file_command";then
-						# Record move kodi files error
-						error "moving \"$kodi_file\" file."
-					fi
-				done
-				IFS=$SAVE_IFS
+		if [ -z "$NO_VIDEO_FLAG" ]; then
+			# Import xml elements from destination nfo file to source nfo file.
+			# TV show nfo file path.
+			if [ -f "$source_directory""tvshow.nfo" ]; then
+				nfo_flag=true
 			fi
 
-			# move kodi files that does not start same as file name.
-			for pattern in tvshow.nfo poster.* movie.* folder.* cover.* fanart* backdrop* banner.* clearart.* disc.* discart.* thumb.* landscape.* clearlogo.* logo.* keyart.* characterart.* season* tvshow-trailers.* trailer.*; do
-				kodi_files=$(find "${source%/*}" -maxdepth 1 -type f -name "$pattern")
-				if [ -n "$kodi_files" ];then
+			if [ -n "$nfo_flag" ]; then
+				for source_nfo_file in .nfo movie.nfo tvshow.nfo;do
+					
+					# Create source and destination nfo file path.
+					if [ "$source_nfo_file" = ".nfo" ]; then 
+						destination_nfo_file="${destination%.*}$source_nfo_file"
+						source_nfo_file="${source%.*}$source_nfo_file"
+					else
+						destination_nfo_file="$destination_directory$source_nfo_file"
+						source_nfo_file="$source_directory$source_nfo_file"
+					fi
 
+					# Chek if exist source nfo file.
+					if [ -f "$source_nfo_file" ]; then 
+						# Delete empty xml <element></element> elements from source_nfo_file file.
+						sed -i '/^\s*<[^>]*>\s*<\/[^>]*>\s*$/d' "$source_nfo_file"
+						# Delete empty xml <element/> elements from source_nfo_file file.
+						sed -i '/^\s*<[^>]*\/>\s*$/d' "$source_nfo_file"
+						
+						if [ -f "$destination_nfo_file" ]; then
+							# Get XML elements tabulator.
+							xml_tabulator=$(grep -o '^ *' "$source_nfo_file" | head -n 1)
+
+							for xml_element in "userrating" "watched" "playcount" "dateadded" "lastplayed"; do
+								# Extract the value from the destination_nfo_file XML file.
+								destination_xml_value=$(grep "<$xml_element>" "$destination_nfo_file" | sed -e "s/.*<$xml_element>\([^<]*\)<\/$xml_element>.*/\1/")
+								# Check if a valid value was extracted.
+								if [ -n "$destination_xml_value" ]; then
+									source_xml_value=$(grep "<$xml_element>" "$source_nfo_file" | sed -e "s/.*<$xml_element>\([^<]*\)<\/$xml_element>.*/\1/")
+									if [ -n "$source_xml_value" ]; then
+										# Update the source file only if the destination value is different from the source value.
+										if [ "$destination_xml_value" != "$source_xml_value" ]; then
+											sed -i "s/<$xml_element>[^<]*<\/$xml_element>/<$xml_element>$destination_xml_value<\/$xml_element>/" "$source_nfo_file"
+											echo "$xml_tabulator<$xml_element> updated from $source_xml_value to $destination_xml_value"
+										fi
+									else
+										# Insert the element into the appropriate parent tag in the souce file (movie, tvshow, epsodedetail).
+										for xml_root_element in "movie" "episodedetails" "tvshow"; do
+											if ! grep -q "<$xml_root_element>" "$source_nfo_file"; then
+												continue
+											fi
+
+											# Insert line before closing xml root element "</movie>, </episodedetails> or </tvshow>".
+											if [ -n "$xml_root_element" ];then 
+												sed -i "/<\/$xml_root_element>/ i\\$xml_tabulator<$xml_element>$destination_xml_value</$xml_element>" "$source_nfo_file"
+												echo "$xml_tabulator<$xml_element> value $destination_xml_value inserted into <$xml_root_element>"
+											fi
+											break
+										done
+									fi
+								fi
+							done
+						fi
+					fi
+				done
+
+				# move all kodi files that names begin same as file name.
+				kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$source_file_name*" -not -name "$source_file_name.$extension")
+
+				if [ -n "$kodi_files" ]; then
+					
 					#IFS` determines which characters separate the fields in each line of data.
 					SAVE_IFS=$IFS
 					IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
 
 					for kodi_file in $kodi_files; do
-						kodi_file_destination="$destination_directory"$(basename "$kodi_file")
-						move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
-						echo "$move_file_command"
-						if ! eval "$move_file_command";then
-							error "moving \"$kodi_file\" file."
-						fi
+						# Extract the relative path and construct destination path
+						kodi_file_destination="${kodi_file#"${source%.*}"}"
+						kodi_file_destination="${destination%.*}$kodi_file_destination"
+							move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
+							echo "$move_file_command"
+							if ! eval "$move_file_command";then
+								# Record move kodi files error
+								error "moving \"$kodi_file\" file."
+							fi
 					done
 					IFS=$SAVE_IFS
 				fi
-			done
 
-			# move kodi folders.
-			for folder in .actors/ trailers/ extrafanart/; do
-				if [ -d "$source_directory$folder" ]; then
-					move_file_command="rsync -av --remove-source-files \"$source_directory$folder\" \"$destination_directory$folder\""
-					echo "$move_file_command"
-					if ! eval "$move_file_command";then
-						error "moving \"$source_directory$folder\" folder."
-					else 
-						rmdir "$source_directory$folder"
+				# move kodi files that does not start same as file name.
+				for pattern in tvshow.nfo poster.* movie.* folder.* cover.* fanart* backdrop* banner.* clearart.* disc.* discart.* thumb.* landscape.* clearlogo.* logo.* keyart.* characterart.* season* tvshow-trailers.* trailer.*; do
+					kodi_files=$(find "${source%/*}" -maxdepth 1 -type f -name "$pattern")
+					if [ -n "$kodi_files" ];then
+
+						#IFS` determines which characters separate the fields in each line of data.
+						SAVE_IFS=$IFS
+						IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
+
+						for kodi_file in $kodi_files; do
+							kodi_file_destination="$destination_directory"$(basename "$kodi_file")
+							move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
+							echo "$move_file_command"
+							if ! eval "$move_file_command";then
+								error "moving \"$kodi_file\" file."
+							fi
+						done
+						IFS=$SAVE_IFS
 					fi
-				fi
-			done
+				done
+
+				# move kodi folders.
+				for folder in .actors/ trailers/ extrafanart/; do
+					if [ -d "$source_directory$folder" ]; then
+						move_file_command="rsync -av --remove-source-files \"$source_directory$folder\" \"$destination_directory$folder\""
+						echo "$move_file_command"
+						if ! eval "$move_file_command";then
+							error "moving \"$source_directory$folder\" folder."
+						else 
+							rmdir "$source_directory$folder"
+						fi
+					fi
+				done
+			fi
 		fi
 	else
 		# Register all successful fmmpeg commands.
@@ -679,7 +681,7 @@ convert_file(){
 		return 1
 	fi
 
-	# Successfull FFmpeg end time.
+	# Successful FFmpeg end time.
 	ffmpeg_end_time=$(date +%s)
 
 	# Calculate the difference in seconds.
@@ -733,7 +735,7 @@ convert_file(){
 		return	1
 	fi
 
-	# Register all successful fmmpeg commands.
+	# Register all successful FFmpeg commands.
 	messages_without_mistakes="$messages_without_mistakes$ffmpeg_command\n$saved_size\n"
 
 	# Update the total saved bytes.
@@ -753,7 +755,7 @@ check_file(){
 	#ffmpeg_output=$(ffmpeg -v error -i "$1" -vn -f null - 2>&1)
 	#ffmpeg_output=$(ffmpeg -v error -xerror -err_detect explode -i "$1" -f null - 2>&1)
 	#ffmpeg -xerror -err_detect explode -hide_banner -i "$1" -f null -
-	#ffmpeg -hwaccels -hide_banner #shows gpu akselerators.
+	#ffmpeg -hwaccels -hide_banner #shows GPU accelerators.
 	#ffmpeg -hwaccel vaapi -vaapi_device /dev/dri/renderD128 -xerror -err_detect explode -hide_banner -i "$1" -f null - #works 10x slower
 	# ffmpeg_output do not show ffmpeg status, but catch more errors.
 	#echo "ffmpeg -benchmark -hwaccel vdpau -xerror -err_detect explode -v error -i \"$1\" -f null - 2>&1"
@@ -778,7 +780,7 @@ check_file(){
 			ffmpeg_run_time=$((ffmpeg_end_time - ffmpeg_start_time))
 			formatted_time=$(date -u -d @"$ffmpeg_run_time" +"%T")
 
-			printf "\033[32mOK: $1. Check took $formatted_time to do so.\033[0m\n"
+			printf "\033[01;32mOK: $1. Check took $formatted_time to do so.\033[0m\n"
 			messages_without_mistakes="$messages_without_mistakes$1\n"
 			return 0
 		fi
@@ -794,10 +796,10 @@ check_file(){
 process_directory() {
 	source="$1"
 
-	# Loop through files and subfolders in the folder.
+	# Loop through files and sub folders in the folder.
 	for path in "$source"*; do
 		if [ -d "$path" ]; then
-		# Recursively process subfolders.
+		# Recursively process sub folders.
 		process_directory "$path/"
 
 		elif [ -f "$path" ]; then
@@ -806,7 +808,7 @@ process_directory() {
 			for extension in $EXTENSIONS; do
 				if [ "$extension" = "$file_extension" ]; then
 					
-					# Set same subfolder for destination as source.
+					# Set same sub folder for destination as source.
 					directory=$(dirname "$path")
 					subfolder="${directory#"$source_directory"}"
 					if [ "$directory" = "$subfolder" ]; then
@@ -815,17 +817,18 @@ process_directory() {
 
 					# Print horizontal file separator line.
 					if [ -n "$job_separator" ]; then 
-						if ! command -v "tput" > /dev/null 2>&1; then
-							echo "$job_separator"
-						elif [ "$(tput cols)" -eq "$terminal_columns" ]; then
-							echo "$job_separator"
-						else
+						echo "$job_separator"
+					else
+						# generate default lenght job separator
+						job_separator=$(printf '%*s' "$terminal_columns" " " | tr ' ' '-')
+					fi
+
+					# Change job separator lenght by terminal width.
+					if command -v "tput" > /dev/null 2>&1; then
+						if [ "$(tput cols)" -ne "$terminal_columns" ]; then
 							terminal_columns=$(tput cols)
 							job_separator=$(printf '%*s' "$terminal_columns" " " | tr ' ' '-')
-							echo "$job_separator"
 						fi
-					else 
-						job_separator=$(printf '%*s' "$terminal_columns" " " | tr ' ' '-')
 					fi
 
 					# Determine the operation based on --check parameter.
@@ -842,15 +845,15 @@ process_directory() {
 						# Convert file
 						convert_file "$path" "$destination"
 					fi
-				fi
 				break # Valid extension found.
+				fi
 			done
 		fi
 		subfolder=""
 	done
 }
 
-# Program begining:
+# Program beginning:
 # Check essential programs for script.
 for program in ffprobe ffmpeg; do
 	if ! command -v "$program" > /dev/null 2>&1; then
@@ -898,20 +901,20 @@ while [ $# -gt 0 ]; do
 			echo "  Languages selection priority:"
 			for language in $LANGUAGES;do
 				language_number=$((language_number + 1))
-				printf "\t$language_number. $language\n"
+				printf "\t%s\n" "$language_number. $language"
 			done
 			echo "  Source can be file or directory."
 			echo "  Destination can be only directory."
 			echo "  Supported files extensions $EXTENSIONS"
 			echo "  If one parameter is provided, it is considered as the source."
 			echo "  If two parameters are provided the first is source, second is destination."
-			echo "  -a, --audio		Specify audio tracks (space-separated list of ffmpeg index'es)."
+			echo "  -a, --audio		Specify audio tracks (space-separated list of FFmpeg indexes)."
 			echo "  -c, --check		Checks file for errors."
 			echo "  -d, --debug		Enables script debugging."
 			echo "  -o, --overwrite	Do not prompt for overwriting existing files."
 			echo "  -s, --skip		Skip files that do not need audio/subtitle conversation/removal."
-			echo "  -t, --test		Print only ffmepg commands (dry run)."
-			echo "  -v, --video		Excludes video. Output only audio nad subtitles."
+			echo "  -t, --test		Print only FFmepg commands (dry run)."
+			echo "  -v, --video		Excludes video. Output only audio and subtitles."
 			echo "Example:"
 			echo "  $(basename "$0")			# Use default source and destination."
 			echo "  $(basename "$0") source		# Use source as specified."
@@ -980,7 +983,7 @@ if [ -n "$CHECK_FLAG" ]; then
 	EXTENSIONS=".mkv .avi .mp4 .mka .aac .ac3 .mov .mp2 .mp3 .ogg .vc1 .dss .dts .eac3 .flac .flv .hevc .m2a .m4a .m4v .mks .3g2 .3gp .aa3"
 fi
 
-# Check user input.
+# Check if user given source exist.
 if [ -f "$source" ]; then
 	source_directory=$(dirname "$source")"/"
 	process_directory "$source"
@@ -1006,23 +1009,23 @@ else
 fi
 
 # Messages output.
-# Output successful ffmpeg commands.
+# Output successful FFmpeg commands.
 if [ -n "$messages_without_mistakes" ]; then
 	echo "$job_separator"
 	if [ -n "$CHECK_FLAG" ]; then
 		echo "Successful checks:"
 	elif [ -n "$TEST_FLAG" ]; then
-		echo "All ffmpeg commands:"
+		echo "All FFmpeg commands:"
 	else
 		echo "Successful conversations:"
 	fi
-	printf "\033[32m$messages_without_mistakes\033[0m"
+	printf "\033[01;32m$messages_without_mistakes\033[00m"
 fi
 
 # Output files with errors.
 if [ -n "$errors" ]; then
 	echo "$job_separator"
-	printf "Files with errors is:\n\033[31m$errors\033[0m"
+	printf "Files with errors is:\n\033[01;31m$errors\033[00m"
 fi
 
 # Record the end time.
