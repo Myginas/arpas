@@ -2,8 +2,8 @@
 #################################################################################
 # Description:	This script remove unnecessary audio and subtitles from media	#
 #				files. Converts not supported audio codecs. Renames files.		#
-# Date: [2025-04-06]															#
-# Version: [1.0]																#
+# Date: [2025-04-17]															#
+# Version: [1.1]																#
 #################################################################################
 
 # Enable debugging mode.
@@ -510,7 +510,6 @@ convert_file(){
 	fi
 
 	# Output destination file information.
-
 	# Construct the destination jq command.
 	selected_destination_tracks="$selected_destination_tracks $selected_audio_tracks $subtitle_tracks"
 	json_query_command=""
@@ -965,14 +964,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-
-# Get the last character of the destination.
-last_character=$(printf "%s" "$destination" | tail -c 1)
-
-# Check if the last character is "/" in destination. If not, add "/".
-if [ "$last_character" != "/" ]; then
-	destination="$destination/"
-fi
+input_destination="$destination"
 
 # Check more file extensions than convert.
 if [ -n "$CHECK_FLAG" ]; then
@@ -1000,8 +992,6 @@ elif [ -d "$source" ]; then
 
 	# Directories inputted by user or defaults.
 	source_directory="$source"
-	input_destination="$destination"
-
 	process_directory "$source"
 else
 	echo "Source \"$source\" does not exist or is not a media file. Use existing files with these $EXTENSIONS extensions or directory."
