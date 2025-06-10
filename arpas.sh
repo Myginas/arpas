@@ -1,10 +1,23 @@
 #!/bin/sh
-#################################################################################
-# Description:	This script remove unnecessary audio and subtitles from media	#
-#				files. Converts not supported audio codecs. Renames files.		#
+#######################################################################################
+# arpas.sh - shell script that removes unnecessary audio and subtitles from media files
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 # Date: [2025-05-28]															#
 # Version: [1.2]																#
-#################################################################################
+#######################################################################################
 
 # Enable debugging mode.
 # Loop through all command-line arguments to check for "-d" or "--debug"
