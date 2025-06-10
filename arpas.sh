@@ -1,7 +1,7 @@
 #!/bin/sh
 #######################################################################################
 # arpas.sh - shell script that removes unnecessary audio and subtitles from media files
-#
+# Copyright (C) 2024 Remigijus Gaigalas
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
