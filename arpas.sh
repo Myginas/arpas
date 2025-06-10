@@ -2,8 +2,8 @@
 #################################################################################
 # Description:	This script remove unnecessary audio and subtitles from media	#
 #				files. Converts not supported audio codecs. Renames files.		#
-# Date: [2025-04-17]															#
-# Version: [1.1]																#
+# Date: [2025-05-28]															#
+# Version: [1.2]																#
 #################################################################################
 
 # Enable debugging mode.
@@ -23,6 +23,9 @@ if [ -n "$DEBUG" ]; then
 	set -x
 fi
 
+# Record script start time.
+script_start_time=$(date +%s)
+
 # Define constants. Change them to best suite you.
 DEFAULT_SOURCE="/mnt/Duomenys/Matyti Filmai/arpo testai/" # Default source for movie or TV series. Can be file or directory. Used when not set source.
 DEFAULT_MOVIE_DESTINATION="/mnt/Duomenys/Matyti Filmai/" # Default destination for movie. Can be directory. Used when not set destination.
@@ -41,6 +44,7 @@ messages_without_mistakes="" # Global variable to keep track files without conve
 size_difference=0 # Difference in bytes between source and destination files.
 ffmpeg_run_time=0 # Time to complete FFmpeg command.
 terminal_columns=80 # Terminal text width.
+processed_files_count=0 # Count processed files
 audio_track_user_choice="" # User chosen audio tracks list.
 OVERWRITE_FLAG="" # Overwrite files.
 CHECK_FLAG="" # Check files for errors.
@@ -53,6 +57,16 @@ SKIP_FLAG="" # Do not convert files if no changes will be made to file exept ren
 error() {
 	errors="$errors$1\n"
 	printf "\033[01;31mError: $1\033[0m\n"
+}
+
+# Function to ensure last character of string.
+confirm_last_character() {
+	last_character=$(printf "%s" "$1" | tail -c 1)
+	if [ "$last_character" != "$2" ]; then
+		echo "$1$2"
+	else 
+		echo "$1"
+	fi
 }
 
 # Function to convert bytes to human readable form.
@@ -175,16 +189,10 @@ convert_file(){
 				destination="${renamed_file_name%"$valid_year"*}"
 			fi
 			
-			# Get the last character of the destination.
-			last_character=$(printf "%s" "$destination" | tail -c 1)
-
 			# Check if the last character is " " in destination. If not, add " ".
-			if [ "$last_character" != " " ]; then
-				# output in "destination (2023)" format.
-				destination="$destination ($valid_year)"
-			else
-				destination="$destination($valid_year)"
-			fi
+			destination=$(confirm_last_character "$destination" " ")
+			# Output in "destination (2023)" format.
+			destination="$destination($valid_year)"
 		else
 			# If do not found years then fallback to source file name.
 			destination="$source_file_name"
@@ -413,8 +421,8 @@ convert_file(){
 		selected_destination_tracks=""
 		# Add video and remove title.
 	elif [ -n "$video_codecs" ]; then
-		ffmpeg_command="$ffmpeg_command -map 0:v:0 -metadata title=\"\" -c:v copy -metadata:s:v title=\"\""
-		selected_destination_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video") | .index')"
+		ffmpeg_command="$ffmpeg_command -map 0:V:0 -metadata title=\"\" -c:V:0 copy -metadata:s:v title=\"\""
+		selected_video_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video" and .codec_name != "mjpeg" and .codec_name != "jpeg" and .codec_name != "png") | .index')"
 	fi
 
 	# Map audio tracks.
@@ -475,7 +483,7 @@ convert_file(){
 			# Copy the file with ffmpeg.
 			ffmpeg_command="ffmpeg -xerror -err_detect explode -flags -global_header -hide_banner -i \"$source\""
 			if [ -n "$NO_VIDEO_FLAG" ]; then
-				# Copy without wide tracks.
+				# Copy without video tracks.
 				ffmpeg_command="$ffmpeg_command -vn -c copy"
 			else
 				# Copy with video tracks.
@@ -511,7 +519,7 @@ convert_file(){
 
 	# Output destination file information.
 	# Construct the destination jq command.
-	selected_destination_tracks="$selected_destination_tracks $selected_audio_tracks $subtitle_tracks"
+	selected_destination_tracks="$selected_video_tracks $selected_audio_tracks $subtitle_tracks"
 	json_query_command=""
 	for id in $selected_destination_tracks; do
 	# Append selected indexes to jq command.
@@ -540,8 +548,7 @@ convert_file(){
 	ffmpeg_start_time=$(date +%s)
 
 	if [ -z "$TEST_FLAG" ]; then
-		#Run FFmpeg command and check FFmpeg errors.
-		# Redirect stderr to a file descriptor
+		# Run FFmpeg command and check FFmpeg errors.
 		if ! eval "$ffmpeg_command";then
 			# Record the FFmpeg end time.
 			ffmpeg_end_time=$(date +%s)
@@ -728,7 +735,7 @@ convert_file(){
 	# Output saved disk size of every file.
 	if [ "$size_difference" -gt 0 ]; then
 		saved_size="Saved: $(human_readable_size $size_difference) and it took $formatted_time to do so."
-		echo "$saved_size"
+		printf "\033[01;32m$saved_size\033[00m\n"
 	else
 		error "${destination#"$input_destination"} is same size as source"
 		return	1
@@ -781,7 +788,6 @@ check_file(){
 
 			printf "\033[01;32mOK: $1. Check took $formatted_time to do so.\033[0m\n"
 			messages_without_mistakes="$messages_without_mistakes$1\n"
-			return 0
 		fi
 	else
 		# Dry run. Do nothing.
@@ -830,6 +836,9 @@ process_directory() {
 						fi
 					fi
 
+					# Count processed files.
+					processed_files_count=$(( processed_files_count + 1 ))
+					
 					# Determine the operation based on --check parameter.
 					if [ -n "$CHECK_FLAG" ]; then
 						# Check files
@@ -861,9 +870,6 @@ for program in ffprobe ffmpeg; do
 	fi
 done
 
-# Record script start time.
-script_start_time=$(date +%s)
-
 # Set default source and destination
 source="$DEFAULT_SOURCE"
 destination="$DEFAULT_TV_SHOWS_DESTINATION"
@@ -886,9 +892,6 @@ while [ $# -gt 0 ]; do
 		-c|--check)
 			CHECK_FLAG=true
 			shift
-			;;
-		-d|--debug)
-			shift # Remove the "-d" and "--debug" parameters from the list of arguments.
 			;;
 		-h|--help)
 			echo "Usage:"
@@ -964,7 +967,8 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-input_destination="$destination"
+# Confirm if the last character of $input_destination is '/'
+input_destination=$(confirm_last_character "$destination" "/")
 
 # Check more file extensions than convert.
 if [ -n "$CHECK_FLAG" ]; then
@@ -982,55 +986,53 @@ if [ -f "$source" ]; then
 	return 0 # Exit without messages output
 # If source is directory then remember user file paths.
 elif [ -d "$source" ]; then
-
-	# Check if the last character of $source is '/'
-	last_character=$(printf "%s" "$source" | tail -c 1)
-	if [ "$last_character" != "/" ]; then
-		# Add last character '/'.
-		source="$source/"
-	fi
+	# Confirm if the last character of $source is '/'
+	source=$(confirm_last_character "$source" "/")
 
 	# Directories inputted by user or defaults.
 	source_directory="$source"
 	process_directory "$source"
 else
-	echo "Source \"$source\" does not exist or is not a media file. Use existing files with these $EXTENSIONS extensions or directory."
+	echo "Source \"$source\" does not exist or is not a media file. Use media files with these $EXTENSIONS extensions or directory with media files."
 	exit 1
 fi
 
-# Messages output.
-# Output successful FFmpeg commands.
-if [ -n "$messages_without_mistakes" ]; then
-	echo "$job_separator"
-	if [ -n "$CHECK_FLAG" ]; then
-		echo "Successful checks:"
-	elif [ -n "$TEST_FLAG" ]; then
-		echo "All FFmpeg commands:"
-	else
-		echo "Successful conversations:"
+# Output messages only if more than 1 file processed.
+if [ "$processed_files_count" -gt 1 ]; then
+
+	# Output successful FFmpeg commands.
+	if [ -n "$messages_without_mistakes" ]; then
+			echo "$job_separator"
+			if [ -n "$CHECK_FLAG" ]; then
+				echo "Successful checks:"
+			elif [ -n "$TEST_FLAG" ]; then
+				echo "All FFmpeg commands:"
+			else
+				echo "Successful conversations:"
+			fi
+			printf "\033[01;32m$messages_without_mistakes\033[00m"
 	fi
-	printf "\033[01;32m$messages_without_mistakes\033[00m"
-fi
 
-# Output files with errors.
-if [ -n "$errors" ]; then
-	echo "$job_separator"
-	printf "Files with errors is:\n\033[01;31m$errors\033[00m"
-fi
+	# Output files with errors.
+	if [ -n "$errors" ]; then
+		echo "$job_separator"
+		printf "Files with errors is:\n\033[01;31m$errors\033[00m"
+	fi
 
-# Record the end time.
-script_end_time=$(date +%s)
+	# Record the end time.
+	script_end_time=$(date +%s)
 
-# Calculate the difference in seconds.
-script_execution_time=$((script_end_time - script_start_time))
+	# Calculate the difference in seconds.
+	script_execution_time=$((script_end_time - script_start_time))
 
-# Format the execution time using date command.
-formatted_script_execution_time=$(date -u -d @"$script_execution_time" +"%T")
+	# Format the execution time using date command.
+	script_execution_time=$(date -u -d @"$script_execution_time" +"%T")
 
-if [ -n "$TEST_FLAG" ]; then
-	echo "Dry run took $formatted_script_execution_time."
-elif [ -n "$CHECK_FLAG" ]; then
-	echo "All files check complete in $formatted_script_execution_time"
-elif [ "$total_size_difference" -gt "$size_difference" ]; then
-	echo "Total saved: $(human_readable_size $total_size_difference) and it took $formatted_script_execution_time to do so."
+	if [ -n "$TEST_FLAG" ]; then
+		echo "Dry run for $processed_files_count files took $script_execution_time."
+	elif [ -n "$CHECK_FLAG" ]; then
+		echo "$processed_files_count files check complete in $script_execution_time"
+	elif [ "$total_size_difference" -gt "$size_difference" ]; then
+		echo "Total saved: $(human_readable_size $total_size_difference) and it took $script_execution_time to do so."
+	fi
 fi
