@@ -33,7 +33,7 @@ If you provide a directory, all media files in that directory will be processed.
 
 ## Customization
 
-You can edit `arpas.sh` to adjust which codecs or languages to keep, as well as rename patterns. The script is annotated for easy modification.
+You can edit `arpas.sh` to adjust which codecs or languages to keep. The script is annotated for easy modification.
 
 ### Options
 
@@ -55,7 +55,7 @@ You can edit `arpas.sh` to adjust which codecs or languages to keep, as well as 
 
 - Process a specific file:
   ```sh
-  ./arpas.sh /path/to/video.mkv
+  ./arpas.sh /path/to/video.mkv /path/to/destination/
   ```
 
 - Process a directory:
@@ -70,7 +70,7 @@ You can edit `arpas.sh` to adjust which codecs or languages to keep, as well as 
 
 - Select specific audio tracks:
   ```sh
-  ./arpas.sh -a 1 3 /path/to/video.mkv
+  ./arpas.sh -a 1 3 /path/to/video.mkv /path/to/destination/
   ```
 
 ## License
