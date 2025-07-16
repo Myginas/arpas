@@ -1,23 +1,11 @@
 #!/bin/sh
-#######################################################################################
-# arpas.sh - shell script that removes unnecessary audio and subtitles from media files
-# Copyright (C) 2024 Remigijus Gaigalas
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-# Date: [2025-05-28]															#
-# Version: [1.2]																#
-#######################################################################################
+#################################################################################
+# Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
+#				from media files. Convert not supported audio codecs.			#
+#				Rename files. Move metadata files. Clean nfo files.				#
+# Date: [2025-07-14]															#
+# Version: [1.3]																#
+#################################################################################
 
 # Enable debugging mode.
 # Loop through all command-line arguments to check for "-d" or "--debug"
@@ -41,7 +29,7 @@ script_start_time=$(date +%s)
 
 # Define constants. Change them to best suite you.
 DEFAULT_SOURCE="/mnt/Duomenys/Matyti Filmai/arpo testai/" # Default source for movie or TV series. Can be file or directory. Used when not set source.
-DEFAULT_MOVIE_DESTINATION="/mnt/Duomenys/Matyti Filmai/" # Default destination for movie. Can be directory. Used when not set destination.
+DEFAULT_MOVIE_DESTINATION="/media/remigijus/Duomenys/Matyti Filmai/" # Default destination for movie. Can be directory. Used when not set destination.
 DEFAULT_TV_SHOWS_DESTINATION="/mnt/Duomenys/Matyti Filmai/Serijalai/" # Default TV series directory. Used when not set destination.
 LANGUAGES="lit eng rus"	# Preferred and fallback languages. Script chooses languages from left to right.
 CONVERT_AUDIO_CODEC="libvorbis" # Audio codec to convert unsupported codecs.
@@ -69,7 +57,7 @@ SKIP_FLAG="" # Do not convert files if no changes will be made to file exept ren
 # Function to store error and output to screen.
 error() {
 	errors="$errors$1\n"
-	printf "\033[01;31mError: $1\033[0m\n"
+	printf "\033[01;31m⚠️ $1\033[0m\n"
 }
 
 # Function to ensure last character of string.
@@ -179,7 +167,9 @@ convert_file(){
 			destination_directory=$(echo "$destination_directory" | sed "s|$DEFAULT_TV_SHOWS_DESTINATION|$DEFAULT_MOVIE_DESTINATION|g")
 		fi
 
-		current_year=$(date +%Y)
+		if [ -z "$current_year" ];then 
+			current_year=$(date +%Y)
+		fi
 		valid_year=""
 		# Extract all four-digit numbers from the renamed_file_name and filter out the between 1902 and current_year.
 		for year in $(echo "$renamed_file_name" | grep -oE '[0-9]{4}'); do
@@ -330,7 +320,7 @@ convert_file(){
 			done
 
 			echo
-			echo "Found $selected_audio_tracks_count audio tracks of $audio_language language"
+			echo "⚠️ Found $selected_audio_tracks_count audio tracks of $audio_language language"
 			json_query_command='(["ID:","LANGUAGE:","TITLE:"]), (.['"$json_query_command"'] | [.index, .language, .title]) | @tsv'
 			echo "$file_streams" | jq -r "$json_query_command" | awk -F '\t' '{printf "%-3s %-9s %-0s\n", $1, $2, $3}'
 			
@@ -589,55 +579,65 @@ convert_file(){
 						source_nfo_file="$source_directory$source_nfo_file"
 					fi
 
-					# Chek if exist source nfo file.
+					# Clean source nfo file.
 					if [ -f "$source_nfo_file" ]; then 
-						# Delete empty xml <element></element> elements from source_nfo_file file.
-						sed -i '/^\s*<[^>]*>\s*<\/[^>]*>\s*$/d' "$source_nfo_file"
-						# Delete empty xml <element/> elements from source_nfo_file file.
-						sed -i '/^\s*<[^>]*\/>\s*$/d' "$source_nfo_file"
+						if command -v xmlstarlet > /dev/null 2>&1; then
+							if xmlstarlet ed \
+							-d '//*[not(node())]' \
+							-d '//videoassettitle' \
+							-d '//videoassetid' \
+							-d '//videoassettype' \
+							-d '//hasvideoversions' \
+							-d '//hasvideoextras' \
+							-d '//isdefaultvideoversion' \
+							-d '//resume' \
+							-d '//userrating' \
+							-d '//watched' \
+							-d '//playcount' \
+							-d '//lastplayed' \
+							-d '//ratings/rating[@name="NFO"]' \
+							-d '//top250[text()="0"]' \
+							-d '//isuserfavorite[text()="false"]' \
+							-d '//outline[contains(//plot/text(), .)]' \
+							-d '//fileinfo' \
+							-d '//source[text()="UNKNOWN"]' \
+							-d '//edition[text()="NONE"]' \
+							-d '//mpaa[text()="Not Rated"]' \
+							-d '//certification[text()="Not Rated"]' \
+							-d '//mpaa[text()="NR"]' \
+							-d '//certification[text()="NR"]' \
+							-d '//original_filename' \
+							-d '//user_note' \
+							"$source_nfo_file" > "$destination_nfo_file"; then
+								rm "$source_nfo_file"
+							else
+								error "Failed clean $source_nfo_file"
+							fi
+							### 📌 **Explanation of Commands**
+							# Here’s what each `xmlstarlet ed -d` command does:
+							# | `-d '//*[not(node())]'` | Remove **empty elements** (tags with no text and no children, like `<trailer/>` or `<empty></empty>`). |
+							# | `-d '//ratings/rating[@name="NFO"]'` | Remove `<rating>` elements with `@name="NFO"`. |
+							# | `-d '//top250[text()="0"]'` | Remove `<top250>` elements with value `0`. |
+							# | `-d '//outline[contains(//plot/text(), .)]'` | Remove `<outline>` elements that are **substrings** of the `<plot>` text. |
+							# | `-d '//fileinfo'` | Remove `<fileinfo>` elements. |
+							# | `-d '//source[text()="UNKNOWN"]'` | Remove `<source>` elements with value `UNKNOWN`. |		
 						
-						if [ -f "$destination_nfo_file" ]; then
-							# Get XML elements tabulator.
-							xml_tabulator=$(grep -o '^ *' "$source_nfo_file" | head -n 1)
-
-							for xml_element in "userrating" "watched" "playcount" "dateadded" "lastplayed"; do
-								# Extract the value from the destination_nfo_file XML file.
-								destination_xml_value=$(grep "<$xml_element>" "$destination_nfo_file" | sed -e "s/.*<$xml_element>\([^<]*\)<\/$xml_element>.*/\1/")
-								# Check if a valid value was extracted.
-								if [ -n "$destination_xml_value" ]; then
-									source_xml_value=$(grep "<$xml_element>" "$source_nfo_file" | sed -e "s/.*<$xml_element>\([^<]*\)<\/$xml_element>.*/\1/")
-									if [ -n "$source_xml_value" ]; then
-										# Update the source file only if the destination value is different from the source value.
-										if [ "$destination_xml_value" != "$source_xml_value" ]; then
-											sed -i "s/<$xml_element>[^<]*<\/$xml_element>/<$xml_element>$destination_xml_value<\/$xml_element>/" "$source_nfo_file"
-											echo "$xml_tabulator<$xml_element> updated from $source_xml_value to $destination_xml_value"
-										fi
-									else
-										# Insert the element into the appropriate parent tag in the souce file (movie, tvshow, epsodedetail).
-										for xml_root_element in "movie" "episodedetails" "tvshow"; do
-											if ! grep -q "<$xml_root_element>" "$source_nfo_file"; then
-												continue
-											fi
-
-											# Insert line before closing xml root element "</movie>, </episodedetails> or </tvshow>".
-											if [ -n "$xml_root_element" ];then 
-												sed -i "/<\/$xml_root_element>/ i\\$xml_tabulator<$xml_element>$destination_xml_value</$xml_element>" "$source_nfo_file"
-												echo "$xml_tabulator<$xml_element> value $destination_xml_value inserted into <$xml_root_element>"
-											fi
-											break
-										done
-									fi
-								fi
-							done
+						else
+							error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
 						fi
 					fi
 				done
 
 				# move all kodi files that names begin same as file name.
-				kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$source_file_name*" -not -name "$source_file_name.$extension")
+				escaped_source="${source%/*}"
+				escaped_source=$(echo "$escaped_source" | sed 's/\[/\\[/g')		# Escape [
+				escaped_source=$(echo "$escaped_source" | sed 's/\]/\\]/g')		# Escape ]
+				escaped_source=$(echo "$escaped_source" | sed 's/\*/\\*/g')		# Escape *
+				escaped_source=$(echo "$escaped_source" | sed 's/\?/\\?/g')		# Escape ?
+
+				kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$escaped_source*" -not -name "$escaped_source.$extension")
 
 				if [ -n "$kodi_files" ]; then
-					
 					#IFS` determines which characters separate the fields in each line of data.
 					SAVE_IFS=$IFS
 					IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
@@ -657,25 +657,43 @@ convert_file(){
 				fi
 
 				# move kodi files that does not start same as file name.
-				for pattern in tvshow.nfo poster.* movie.* folder.* cover.* fanart* backdrop* banner.* clearart.* disc.* discart.* thumb.* landscape.* clearlogo.* logo.* keyart.* characterart.* season* tvshow-trailers.* trailer.*; do
-					kodi_files=$(find "${source%/*}" -maxdepth 1 -type f -name "$pattern")
-					if [ -n "$kodi_files" ];then
+				kodi_files=$(find "$source_directory" -maxdepth 1 -type f \( -name tvshow.nfo \
+					-o -name poster.* \
+					-o -name movie.* \
+					-o -name folder.* \
+					-o -name cover.* \
+					-o -name fanart* \
+					-o -name backdrop* \
+					-o -name banner.* \
+					-o -name clearart.* \
+					-o -name disc.* \
+					-o -name discart.* \
+					-o -name thumb.* \
+					-o -name landscape.* \
+					-o -name clearlogo.* \
+					-o -name logo.* \
+					-o -name keyart.* \
+					-o -name characterart.* \
+					-o -name season* \
+					-o -name tvshow-trailers.* \
+					-o -name trailer.* \))
 
-						#IFS` determines which characters separate the fields in each line of data.
-						SAVE_IFS=$IFS
-						IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
+				if [ -n "$kodi_files" ];then
 
-						for kodi_file in $kodi_files; do
-							kodi_file_destination="$destination_directory"$(basename "$kodi_file")
-							move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
-							echo "$move_file_command"
-							if ! eval "$move_file_command";then
-								error "moving \"$kodi_file\" file."
-							fi
-						done
-						IFS=$SAVE_IFS
-					fi
-				done
+					#IFS` determines which characters separate the fields in each line of data.
+					SAVE_IFS=$IFS
+					IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
+
+					for kodi_file in $kodi_files; do
+						kodi_file_destination="$destination_directory"$(basename "$kodi_file")
+						move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
+						echo "$move_file_command"
+						if ! eval "$move_file_command";then
+							error "moving \"$kodi_file\" file."
+						fi
+					done
+					IFS=$SAVE_IFS
+				fi
 
 				# move kodi folders.
 				for folder in .actors/ trailers/ extrafanart/; do
@@ -966,7 +984,7 @@ while [ $# -gt 0 ]; do
 				destination="$2"
 			else
 				# More than two parameters provided, treat as error.
-				echo "Error in given arguments:"
+				echo "⚠️ Error in given arguments:"
 				for script_argument in "$@"; do
 					argument_number=$(( argument_number + 1 ))
 					echo "$argument_number. $script_argument"
@@ -1006,7 +1024,7 @@ elif [ -d "$source" ]; then
 	source_directory="$source"
 	process_directory "$source"
 else
-	echo "Source \"$source\" does not exist or is not a media file. Use media files with these $EXTENSIONS extensions or directory with media files."
+	echo "⚠️ Source \"$source\" does not exist or is not a media file. Use media files with these $EXTENSIONS extensions or directory with media files."
 	exit 1
 fi
 
@@ -1017,11 +1035,11 @@ if [ "$processed_files_count" -gt 1 ]; then
 	if [ -n "$messages_without_mistakes" ]; then
 			echo "$job_separator"
 			if [ -n "$CHECK_FLAG" ]; then
-				echo "Successful checks:"
+				echo "✅ Successful checks:"
 			elif [ -n "$TEST_FLAG" ]; then
 				echo "All FFmpeg commands:"
 			else
-				echo "Successful conversations:"
+				echo "✅ Successful conversations:"
 			fi
 			printf "\033[01;32m$messages_without_mistakes\033[00m"
 	fi
