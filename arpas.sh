@@ -3,8 +3,11 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2025-07-14]															#
-# Version: [1.3]																#
+# Date: [2025-08-10]															#
+# Version: [1.3.1]																#
+# Fix:	Find files that names begin same as file name.							#
+#		Correctly printf ("10%").												#
+#		Subfolder extraction.													#
 #################################################################################
 
 # Enable debugging mode.
@@ -47,12 +50,13 @@ ffmpeg_run_time=0 # Time to complete FFmpeg command.
 terminal_columns=80 # Terminal text width.
 processed_files_count=0 # Count processed files
 audio_track_user_choice="" # User chosen audio tracks list.
-OVERWRITE_FLAG="" # Overwrite files.
+OVERWRITE_FLAG="" # Overwrite media files.
 CHECK_FLAG="" # Check files for errors.
 NO_VIDEO_FLAG="" # Output only audio and subtitles.
 TEST_FLAG="" # Dry run conversation.
 AUDIO_FLAG="" # Select only preferred audio tracks.
-SKIP_FLAG="" # Do not convert files if no changes will be made to file exept renaming and copying to destination.
+SKIP_FLAG="" # Skip files that do not need audio/subtitle conversation/removal."
+
 
 # Function to store error and output to screen.
 error() {
@@ -254,7 +258,7 @@ convert_file(){
 	echo "Source file: $source"
 	# FFprobe command to extract video, audio and subtitles information.
 		 if ! file_streams="$(ffprobe -v error -print_format json -show_entries stream=index,codec_type,codec_name:stream_tags=language,title "$source")";then
-			error "Extracting stream information from (${1#"$source_directory"})."
+			error "Extracting stream information from ${1#"$source_directory"}."
 			return 1
 		fi
 
@@ -629,13 +633,12 @@ convert_file(){
 				done
 
 				# move all kodi files that names begin same as file name.
-				escaped_source="${source%/*}"
-				escaped_source=$(echo "$escaped_source" | sed 's/\[/\\[/g')		# Escape [
-				escaped_source=$(echo "$escaped_source" | sed 's/\]/\\]/g')		# Escape ]
-				escaped_source=$(echo "$escaped_source" | sed 's/\*/\\*/g')		# Escape *
-				escaped_source=$(echo "$escaped_source" | sed 's/\?/\\?/g')		# Escape ?
+				escaped_source_file_name=$(echo "$source_file_name" | sed 's/\[/\\[/g')			# Escape [
+				escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\]/\\]/g')	# Escape ]
+				escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\*/\\*/g')	# Escape *
+				escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\?/\\?/g')	# Escape ?
 
-				kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$escaped_source*" -not -name "$escaped_source.$extension")
+				kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$escaped_source_file_name*" -not -name "$escaped_source_file_name.$extension")
 
 				if [ -n "$kodi_files" ]; then
 					#IFS` determines which characters separate the fields in each line of data.
@@ -743,7 +746,7 @@ convert_file(){
 	# Check if the destination file is less than 10% of the source file size.
 	ten_percent=$((source_size / 10))
 	if [ "$destination_size" -lt "$ten_percent" ] || [ "$destination_size" -eq 0 ] && [ -z "$NO_VIDEO_FLAG" ]; then
-		error "Destination file (${destination#"$input_destination"}) is less than 10% of the source file. Deleting it."
+		error "Destination file (${destination#"$input_destination"}) is less than 10%% of the source file. Deleting it."
 
 		# Delete destination file.
 		if [ -f "$destination" ]; then
@@ -817,7 +820,7 @@ check_file(){
 			ffmpeg_run_time=$((ffmpeg_end_time - ffmpeg_start_time))
 			formatted_time=$(date -u -d @"$ffmpeg_run_time" +"%T")
 
-			printf "\033[01;32mOK: $1. Check took $formatted_time to do so.\033[0m\n"
+			printf "\033[01;32m✅ $1. Check took $formatted_time to do so.\033[0m\n"
 			messages_without_mistakes="$messages_without_mistakes$1\n"
 		fi
 	else
@@ -831,26 +834,16 @@ check_file(){
 # Function to process files in a directory recursively.
 process_directory() {
 	source="$1"
-
 	# Loop through files and sub folders in the folder.
 	for path in "$source"*; do
 		if [ -d "$path" ]; then
-		# Recursively process sub folders.
-		process_directory "$path/"
-
+			# Recursively process sub folders.
+			process_directory "$path/"
 		elif [ -f "$path" ]; then
 			# Check if a file has a valid extension.
 			file_extension=".${path##*.}"
 			for extension in $EXTENSIONS; do
 				if [ "$extension" = "$file_extension" ]; then
-					
-					# Set same sub folder for destination as source.
-					directory=$(dirname "$path")
-					subfolder="${directory#"$source_directory"}"
-					if [ "$directory" = "$subfolder" ]; then
-						subfolder=""
-					fi
-
 					# Print horizontal file separator line.
 					if [ -n "$job_separator" ]; then 
 						echo "$job_separator"
@@ -865,6 +858,13 @@ process_directory() {
 							terminal_columns=$(tput cols)
 							job_separator=$(printf '%*s' "$terminal_columns" " " | tr ' ' '-')
 						fi
+					fi
+
+					# Set same sub folder for destination as source.
+					directory=$(dirname "$path")
+					subfolder="${directory#"$user_source_directory"}"
+					if [ "$directory" = "$subfolder" ]; then
+						subfolder=""
 					fi
 
 					# Count processed files.
@@ -944,7 +944,7 @@ while [ $# -gt 0 ]; do
 			echo "  -a, --audio		Specify audio tracks (space-separated list of FFmpeg indexes)."
 			echo "  -c, --check		Checks file for errors."
 			echo "  -d, --debug		Enables script debugging."
-			echo "  -o, --overwrite	Do not prompt for overwriting existing files."
+			echo "  -o, --overwrite	Overwrite all existing destination media files without prompt for each file."
 			echo "  -s, --skip		Skip files that do not need audio/subtitle conversation/removal."
 			echo "  -t, --test		Print only FFmepg commands (dry run)."
 			echo "  -v, --video		Excludes video. Output only audio and subtitles."
@@ -1010,9 +1010,9 @@ if [ -n "$CHECK_FLAG" ]; then
 	EXTENSIONS=".mkv .avi .mp4 .mka .aac .ac3 .mov .mp2 .mp3 .ogg .vc1 .dss .dts .eac3 .flac .flv .hevc .m2a .m4a .m4v .mks .3g2 .3gp .aa3"
 fi
 
-# Check if user given source exist.
+# Check if user given source is file or directory.
 if [ -f "$source" ]; then
-	source_directory=$(dirname "$source")"/"
+	user_source_directory=$(dirname "$source")"/"
 	process_directory "$source"
 	return 0 # Exit without messages output
 # If source is directory then remember user file paths.
@@ -1021,7 +1021,7 @@ elif [ -d "$source" ]; then
 	source=$(confirm_last_character "$source" "/")
 
 	# Directories inputted by user or defaults.
-	source_directory="$source"
+	user_source_directory="$source"
 	process_directory "$source"
 else
 	echo "⚠️ Source \"$source\" does not exist or is not a media file. Use media files with these $EXTENSIONS extensions or directory with media files."
@@ -1048,6 +1048,7 @@ if [ "$processed_files_count" -gt 1 ]; then
 	if [ -n "$errors" ]; then
 		echo "$job_separator"
 		printf "Files with errors is:\n\033[01;31m$errors\033[00m"
+
 	fi
 
 	# Record the end time.
