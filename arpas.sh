@@ -3,12 +3,13 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2025-08-10]															#
-# Version: [1.3.1]																#
-# Fix:	Find files that names begin same as file name.							#
-#		Correctly printf ("10%").												#
-#		Subfolder extraction.													#
+# Date: [2025-12-06]															#
+# Version: [1.4]																#
+# Add feature:	Convert m2ts, ts and avi files to mkv.							#
 #################################################################################
+
+# Record script start time.
+script_start_time=$(date +%s)
 
 # Enable debugging mode.
 # Loop through all command-line arguments to check for "-d" or "--debug"
@@ -27,14 +28,11 @@ if [ -n "$DEBUG" ]; then
 	set -x
 fi
 
-# Record script start time.
-script_start_time=$(date +%s)
-
 # Define constants. Change them to best suite you.
 DEFAULT_SOURCE="/mnt/Duomenys/Matyti Filmai/arpo testai/" # Default source for movie or TV series. Can be file or directory. Used when not set source.
 DEFAULT_MOVIE_DESTINATION="/media/remigijus/Duomenys/Matyti Filmai/" # Default destination for movie. Can be directory. Used when not set destination.
 DEFAULT_TV_SHOWS_DESTINATION="/mnt/Duomenys/Matyti Filmai/Serijalai/" # Default TV series directory. Used when not set destination.
-LANGUAGES="lit eng rus"	# Preferred and fallback languages. Script chooses languages from left to right.
+LANGUAGES="lit eng rus"	# Preferred and fallback languages. Script chooses language from left to right.
 CONVERT_AUDIO_CODEC="libvorbis" # Audio codec to convert unsupported codecs.
 EXTENSIONS=".mkv .avi .mka .mp4 .m2ts .ts" # Script supported file extensions.
 SUPPORTED_VIDEO_CODECS="h264 hevc av1 vp9 vp8" # Convert audio with these video codecs.
@@ -46,9 +44,9 @@ total_size_difference=0 # Global variable to keep track of total file size diffe
 errors="" # Global variable to keep track files with conversation errors.
 messages_without_mistakes="" # Global variable to keep track files without conversation errors.
 size_difference=0 # Difference in bytes between source and destination files.
-ffmpeg_run_time=0 # Time to complete FFmpeg command.
-terminal_columns=80 # Terminal text width.
-processed_files_count=0 # Count processed files
+ffmpeg_run_time=0 # Time to complete FFmpeg command in seconds.
+terminal_columns=80 # Terminal text width in symbols.
+processed_files_count=0 # Count processed files.
 audio_track_user_choice="" # User chosen audio tracks list.
 OVERWRITE_FLAG="" # Overwrite media files.
 CHECK_FLAG="" # Check files for errors.
@@ -56,7 +54,6 @@ NO_VIDEO_FLAG="" # Output only audio and subtitles.
 TEST_FLAG="" # Dry run conversation.
 AUDIO_FLAG="" # Select only preferred audio tracks.
 SKIP_FLAG="" # Skip files that do not need audio/subtitle conversation/removal."
-
 
 # Function to store error and output to screen.
 error() {
@@ -109,12 +106,18 @@ convert_file(){
 	source_directory=$(dirname "$source")"/"
 
 	# Make destination file name from destination path and source file name.
-	extension=$(echo "$source" | awk -F. '{print $NF}')
+	source_extension=$(echo "$source" | awk -F. '{print $NF}')
+	if [ "$source_extension" =  "m2ts" ] || [ "$source_extension" = "ts" ] || [ "$source_extension" = "avi" ]  ; then
+		destination_extension="mkv"
+	else
+		destination_extension="$source_extension"
+	fi
+
 	source_file_name=$(basename "$source")
 	source_file_name="${source_file_name%.*}" # File name without extension.
 
-	destination_subfolder="${destination_directory%/*}"
-	destination_subfolder="${destination_subfolder##*/}"
+	destination_sub_folder="${destination_directory%/*}"
+	destination_sub_folder="${destination_sub_folder##*/}"
 
 	# Clean symbols in source_file_name.
 	renamed_file_name=$source_file_name
@@ -147,11 +150,11 @@ convert_file(){
 			# ${renamed_file_name%%$series_pattern*} - TV series name before S01E01, if start with S01E01 then = "".
 			TV_show_name=$(echo "${renamed_file_name%%$series_pattern*}" | sed 's/[^[:alnum:]_]*$//')
 			if [ -n "$TV_show_name" ];then
-				destination_subfolder="$TV_show_name"
+				destination_sub_folder="$TV_show_name"
 			else
-				destination_subfolder="$source_subfolder"
+				destination_sub_folder="$source_subfolder"
 			fi
-			destination_directory="$destination_directory$destination_subfolder/"
+			destination_directory="$destination_directory$destination_sub_folder/"
 		fi
 
 		# Check if $renamed_file_name starts with the series pattern.
@@ -205,8 +208,8 @@ convert_file(){
 			destination="$source_file_name"
 		fi
 
-		destination_subfolder="${destination_directory%/*}"
-		destination_subfolder="${destination_subfolder##*/}"
+		destination_sub_folder="${destination_directory%/*}"
+		destination_sub_folder="${destination_sub_folder##*/}"
 
 		# Movie nfo file path.
 		if [ -f "${source%.*}.nfo" ]; then
@@ -217,27 +220,26 @@ convert_file(){
 			nfo_flag=""
 		fi
 
-#TODO: rename destination_subfolder to destination_sub_folder
 		# Rename parent folder if it same as file name.
 		if [ -n "$nfo_flag" ];then 
 			# if destination_sub_folder != source file name and destination_sub_folder != destination then add sub folder.
-			if [ "$destination_subfolder" != "$source_file_name" ]; then
-				if [ "$destination_subfolder" != "$destination" ]; then
+			if [ "$destination_sub_folder" != "$source_file_name" ]; then
+				if [ "$destination_sub_folder" != "$destination" ]; then
 					destination_directory="$destination_directory$destination/"
 				fi
-			# if destination_subfolder = source_file_name then replace destiantion_subfolder with destination.
+			# if destination_sub_folder = source_file_name then replace destination_sub_folder with destination.
 			else
 				destination_directory=$(echo "$destination_directory" | sed "s/$source_subfolder/$destination/")
 			fi
 		fi
 	fi
 
-	# Rename destination_subfolder if it is same as source file name.
-	destination_subfolder="${destination_directory%/*}"
-	destination_subfolder="${destination_subfolder##*/}"
-	if [ "$source_file_name" = "$destination_subfolder" ]; then
-		destination_directory=$(echo "$destination_directory" | sed "s/$destination_subfolder/$destination/")
-		destination_subfolder="$destination"
+	# Rename destination_sub_folder if it is same as source file name.
+	destination_sub_folder="${destination_directory%/*}"
+	destination_sub_folder="${destination_sub_folder##*/}"
+	if [ "$source_file_name" = "$destination_sub_folder" ]; then
+		destination_directory=$(echo "$destination_directory" | sed "s/$destination_sub_folder/$destination/")
+		destination_sub_folder="$destination"
 	fi
 
 	# Audio file save as .mka in source directory.
@@ -252,7 +254,7 @@ convert_file(){
 
 	else
 		# Destination path + normalized file name + source extension.
-		destination="$destination_directory$destination.$extension"
+		destination="$destination_directory$destination.$destination_extension"
 	fi
 
 	echo "Source file: $source"
@@ -362,7 +364,7 @@ convert_file(){
 		fi
 	fi
 
-	# Run ffprobe to get information about the video streams.
+	# Get video streams codecs.
 	video_codecs=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video") | .codec_name')
 
 	# Check if any video codec is supported.
@@ -638,7 +640,7 @@ convert_file(){
 				escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\*/\\*/g')	# Escape *
 				escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\?/\\?/g')	# Escape ?
 
-				kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$escaped_source_file_name*" -not -name "$escaped_source_file_name.$extension")
+				kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$escaped_source_file_name*" -not -name "$escaped_source_file_name.$source_extension")
 
 				if [ -n "$kodi_files" ]; then
 					#IFS` determines which characters separate the fields in each line of data.
