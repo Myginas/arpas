@@ -4,10 +4,9 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2025-12-23]															#
-# Version: [1.5]																#
-# Add feature: Add subfolder for TV series if destination folder not same as 	#
-#			   source folder.													#
+# Date: [2025-12-27]															#
+# Version: [1.6]																#
+# Fix: move TV series nfo files													#
 #################################################################################
 
 # Record script start time.
@@ -218,17 +217,8 @@ convert_file(){
 		destination_folder="${destination_directory%/*}"
 		destination_folder="${destination_folder##*/}"
 
-		# Movie nfo file path.
-		if [ -f "${source%.*}.nfo" ]; then
-			nfo_flag=true
-		elif [ -f "$source_directory""movie.nfo" ]; then
-			nfo_flag=true
-		else
-			nfo_flag=""
-		fi
-
-		# Rename parent folder if it same as file name.
-		if [ -n "$nfo_flag" ];then 
+		# Rename parent movie folder if it same as file name.
+		if [ -f "${source%.*}.nfo" ] || [ -f "$source_directory""movie.nfo" ];then 
 			# Add folder if destination not same as source file name and destination
 			if [ "$destination_folder" != "$source_file_name" ]; then
 				if [ "$destination_folder" != "$destination" ]; then
@@ -575,152 +565,146 @@ convert_file(){
 		fi
 
 		if [ -z "$NO_VIDEO_FLAG" ]; then
-			# Import xml elements from destination nfo file to source nfo file.
-			# TV show nfo file path.
-			if [ -f "$source_directory""tvshow.nfo" ]; then
-				nfo_flag=true
-			fi
 
-			if [ -n "$nfo_flag" ]; then
-				for source_nfo_file in .nfo movie.nfo tvshow.nfo;do
-					
-					# Create source and destination nfo file path.
-					if [ "$source_nfo_file" = ".nfo" ]; then 
-						destination_nfo_file="${destination%.*}$source_nfo_file"
-						source_nfo_file="${source%.*}$source_nfo_file"
-					else
-						destination_nfo_file="$destination_directory$source_nfo_file"
-						source_nfo_file="$source_directory$source_nfo_file"
-					fi
-
-					# Clean source nfo file.
-					if [ -f "$source_nfo_file" ]; then 
-						if command -v xmlstarlet > /dev/null 2>&1; then
-							if xmlstarlet ed \
-							-d '//*[not(node())]' \
-							-d '//videoassettitle' \
-							-d '//videoassetid' \
-							-d '//videoassettype' \
-							-d '//hasvideoversions' \
-							-d '//hasvideoextras' \
-							-d '//isdefaultvideoversion' \
-							-d '//resume' \
-							-d '//userrating' \
-							-d '//watched' \
-							-d '//playcount' \
-							-d '//lastplayed' \
-							-d '//ratings/rating[@name="NFO"]' \
-							-d '//top250[text()="0"]' \
-							-d '//isuserfavorite[text()="false"]' \
-							-d '//outline[contains(//plot/text(), .)]' \
-							-d '//fileinfo' \
-							-d '//source[text()="UNKNOWN"]' \
-							-d '//edition[text()="NONE"]' \
-							-d '//mpaa[text()="Not Rated"]' \
-							-d '//certification[text()="Not Rated"]' \
-							-d '//mpaa[text()="NR"]' \
-							-d '//certification[text()="NR"]' \
-							-d '//original_filename' \
-							-d '//user_note' \
-							"$source_nfo_file" > "$destination_nfo_file"; then
-								rm "$source_nfo_file"
-							else
-								error "Failed clean $source_nfo_file"
-							fi
-							### 📌 **Explanation of Commands**
-							# Here’s what each `xmlstarlet ed -d` command does:
-							# | `-d '//*[not(node())]'` | Remove **empty elements** (tags with no text and no children, like `<trailer/>` or `<empty></empty>`). |
-							# | `-d '//ratings/rating[@name="NFO"]'` | Remove `<rating>` elements with `@name="NFO"`. |
-							# | `-d '//top250[text()="0"]'` | Remove `<top250>` elements with value `0`. |
-							# | `-d '//outline[contains(//plot/text(), .)]'` | Remove `<outline>` elements that are **substrings** of the `<plot>` text. |
-							# | `-d '//fileinfo'` | Remove `<fileinfo>` elements. |
-							# | `-d '//source[text()="UNKNOWN"]'` | Remove `<source>` elements with value `UNKNOWN`. |		
-						
-						else
-							error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
-						fi
-					fi
-				done
-
-				# move all kodi files that names begin same as file name.
-				escaped_source_file_name=$(echo "$source_file_name" | sed 's/\[/\\[/g')			# Escape [
-				escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\]/\\]/g')	# Escape ]
-				escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\*/\\*/g')	# Escape *
-				escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\?/\\?/g')	# Escape ?
-
-				kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$escaped_source_file_name*" -not -name "$escaped_source_file_name.$source_extension")
-
-				if [ -n "$kodi_files" ]; then
-					#IFS` determines which characters separate the fields in each line of data.
-					SAVE_IFS=$IFS
-					IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
-
-					for kodi_file in $kodi_files; do
-						# Extract the relative path and construct destination path
-						kodi_file_destination="${kodi_file#"${source%.*}"}"
-						kodi_file_destination="${destination%.*}$kodi_file_destination"
-							move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
-							echo "$move_file_command"
-							if ! eval "$move_file_command";then
-								# Record move kodi files error
-								error "moving \"$kodi_file\" file."
-							fi
-					done
-					IFS=$SAVE_IFS
+			for source_nfo_file in .nfo movie.nfo tvshow.nfo;do
+				
+				# Create source and destination nfo file path.
+				if [ "$source_nfo_file" = ".nfo" ]; then 
+					destination_nfo_file="${destination%.*}$source_nfo_file"
+					source_nfo_file="${source%.*}$source_nfo_file"
+				else
+					destination_nfo_file="$destination_directory$source_nfo_file"
+					source_nfo_file="$source_directory$source_nfo_file"
 				fi
 
-				# move kodi files that does not start same as file name.
-				kodi_files=$(find "$source_directory" -maxdepth 1 -type f \( -name tvshow.nfo \
-					-o -name poster.* \
-					-o -name movie.* \
-					-o -name folder.* \
-					-o -name cover.* \
-					-o -name fanart* \
-					-o -name backdrop* \
-					-o -name banner.* \
-					-o -name clearart.* \
-					-o -name disc.* \
-					-o -name discart.* \
-					-o -name thumb.* \
-					-o -name landscape.* \
-					-o -name clearlogo.* \
-					-o -name logo.* \
-					-o -name keyart.* \
-					-o -name characterart.* \
-					-o -name season* \
-					-o -name tvshow-trailers.* \
-					-o -name trailer.* \))
+				# Clean source nfo file.
+				if [ -f "$source_nfo_file" ]; then 
+					if command -v xmlstarlet > /dev/null 2>&1; then
+						if xmlstarlet ed \
+						-d '//*[not(node())]' \
+						-d '//videoassettitle' \
+						-d '//videoassetid' \
+						-d '//videoassettype' \
+						-d '//hasvideoversions' \
+						-d '//hasvideoextras' \
+						-d '//isdefaultvideoversion' \
+						-d '//resume' \
+						-d '//userrating' \
+						-d '//watched' \
+						-d '//playcount' \
+						-d '//lastplayed' \
+						-d '//ratings/rating[@name="NFO"]' \
+						-d '//top250[text()="0"]' \
+						-d '//isuserfavorite[text()="false"]' \
+						-d '//outline[contains(//plot/text(), .)]' \
+						-d '//fileinfo' \
+						-d '//source[text()="UNKNOWN"]' \
+						-d '//edition[text()="NONE"]' \
+						-d '//mpaa[text()="Not Rated"]' \
+						-d '//certification[text()="Not Rated"]' \
+						-d '//mpaa[text()="NR"]' \
+						-d '//certification[text()="NR"]' \
+						-d '//original_filename' \
+						-d '//user_note' \
+						"$source_nfo_file" > "$destination_nfo_file"; then
+							rm "$source_nfo_file"
+							echo "Clean $destination_nfo_file"
+						else
+							error "Failed clean $source_nfo_file"
+						fi
+						### 📌 **Explanation of Commands**
+						# Here’s what each `xmlstarlet ed -d` command does:
+						# | `-d '//*[not(node())]'` | Remove **empty elements** (tags with no text and no children, like `<trailer/>` or `<empty></empty>`). |
+						# | `-d '//ratings/rating[@name="NFO"]'` | Remove `<rating>` elements with `@name="NFO"`. |
+						# | `-d '//top250[text()="0"]'` | Remove `<top250>` elements with value `0`. |
+						# | `-d '//outline[contains(//plot/text(), .)]'` | Remove `<outline>` elements that are **substrings** of the `<plot>` text. |
+						# | `-d '//fileinfo'` | Remove `<fileinfo>` elements. |
+						# | `-d '//source[text()="UNKNOWN"]'` | Remove `<source>` elements with value `UNKNOWN`. |		
+					
+					else
+						error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
+					fi
+				fi
+			done
 
-				if [ -n "$kodi_files" ];then
+			# move all kodi files that names begin same as file name.
+			escaped_source_file_name=$(echo "$source_file_name" | sed 's/\[/\\[/g')			# Escape [
+			escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\]/\\]/g')	# Escape ]
+			escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\*/\\*/g')	# Escape *
+			escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\?/\\?/g')	# Escape ?
 
-					#IFS` determines which characters separate the fields in each line of data.
-					SAVE_IFS=$IFS
-					IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
+			kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$escaped_source_file_name*" -not -name "$escaped_source_file_name.$source_extension")
 
-					for kodi_file in $kodi_files; do
-						kodi_file_destination="$destination_directory"$(basename "$kodi_file")
+			if [ -n "$kodi_files" ]; then
+				#IFS` determines which characters separate the fields in each line of data.
+				SAVE_IFS=$IFS
+				IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
+
+				for kodi_file in $kodi_files; do
+					# Extract the relative path and construct destination path
+					kodi_file_destination="${kodi_file#"${source%.*}"}"
+					kodi_file_destination="${destination%.*}$kodi_file_destination"
 						move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
 						echo "$move_file_command"
 						if ! eval "$move_file_command";then
+							# Record move kodi files error
 							error "moving \"$kodi_file\" file."
 						fi
-					done
-					IFS=$SAVE_IFS
-				fi
+				done
+				IFS=$SAVE_IFS
+			fi
 
-				# move kodi folders.
-				for folder in .actors/ trailers/ extrafanart/; do
-					if [ -d "$source_directory$folder" ]; then
-						move_file_command="rsync -av --remove-source-files \"$source_directory$folder\" \"$destination_directory$folder\""
-						echo "$move_file_command"
-						if ! eval "$move_file_command";then
-							error "moving \"$source_directory$folder\" folder."
-						else 
-							rmdir "$source_directory$folder"
-						fi
+			# move kodi files that does not start same as file name.
+			kodi_files=$(find "$source_directory" -maxdepth 1 -type f \( -name tvshow.nfo \
+				-o -name poster.* \
+				-o -name movie.* \
+				-o -name folder.* \
+				-o -name cover.* \
+				-o -name fanart* \
+				-o -name backdrop* \
+				-o -name banner.* \
+				-o -name clearart.* \
+				-o -name disc.* \
+				-o -name discart.* \
+				-o -name thumb.* \
+				-o -name landscape.* \
+				-o -name clearlogo.* \
+				-o -name logo.* \
+				-o -name keyart.* \
+				-o -name characterart.* \
+				-o -name season* \
+				-o -name tvshow-trailers.* \
+				-o -name trailer.* \))
+
+			if [ -n "$kodi_files" ];then
+
+				#IFS` determines which characters separate the fields in each line of data.
+				SAVE_IFS=$IFS
+				IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
+
+				for kodi_file in $kodi_files; do
+					kodi_file_destination="$destination_directory"$(basename "$kodi_file")
+					move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
+					echo "$move_file_command"
+					if ! eval "$move_file_command";then
+						error "moving \"$kodi_file\" file."
 					fi
 				done
+				IFS=$SAVE_IFS
 			fi
+
+			# move kodi folders.
+			for folder in .actors/ trailers/ extrafanart/; do
+				if [ -d "$source_directory$folder" ]; then
+					move_file_command="rsync -av --remove-source-files \"$source_directory$folder\" \"$destination_directory$folder\""
+					echo "$move_file_command"
+					if ! eval "$move_file_command";then
+						error "moving \"$source_directory$folder\" folder."
+					else 
+						rmdir "$source_directory$folder"
+					fi
+				fi
+			done
 		fi
 	else
 		# Register all successful fmmpeg commands.
