@@ -1,11 +1,13 @@
 #!/bin/sh
+# Tab size: 4
 #################################################################################
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2025-12-06]															#
-# Version: [1.4]																#
-# Add feature:	Convert m2ts, ts and avi files to mkv.							#
+# Date: [2025-12-23]															#
+# Version: [1.5]																#
+# Add feature: Add subfolder for TV series if destination folder not same as 	#
+#			   source folder.													#
 #################################################################################
 
 # Record script start time.
@@ -101,8 +103,8 @@ convert_file(){
 	destination_directory="$2"
 
 	# Extract the parent directory of the source path.
-	source_subfolder="${source%/*}"
-	source_subfolder="${source_subfolder##*/}"
+	source_folder="${source%/*}" # /path/folder/file
+	source_folder="${source_folder##*/}"
 	source_directory=$(dirname "$source")"/"
 
 	# Make destination file name from destination path and source file name.
@@ -116,8 +118,8 @@ convert_file(){
 	source_file_name=$(basename "$source")
 	source_file_name="${source_file_name%.*}" # File name without extension.
 
-	destination_sub_folder="${destination_directory%/*}"
-	destination_sub_folder="${destination_sub_folder##*/}"
+	destination_folder="${destination_directory%/*}" # /path/folder/file
+	destination_folder="${destination_folder##*/}"
 
 	# Clean symbols in source_file_name.
 	renamed_file_name=$source_file_name
@@ -150,11 +152,16 @@ convert_file(){
 			# ${renamed_file_name%%$series_pattern*} - TV series name before S01E01, if start with S01E01 then = "".
 			TV_show_name=$(echo "${renamed_file_name%%$series_pattern*}" | sed 's/[^[:alnum:]_]*$//')
 			if [ -n "$TV_show_name" ];then
-				destination_sub_folder="$TV_show_name"
+				destination_folder="$TV_show_name"
 			else
-				destination_sub_folder="$source_subfolder"
+				destination_folder="$source_folder"
 			fi
-			destination_directory="$destination_directory$destination_sub_folder/"
+			destination_directory="$destination_directory$destination_folder/"
+		fi
+
+		# Add subfolder for TV series if destination folder not same as source folder.
+		if [ "$destination_folder" != "$source_folder" ]; then
+			destination_directory="$destination_directory$source_folder/"
 		fi
 
 		# Check if $renamed_file_name starts with the series pattern.
@@ -208,8 +215,8 @@ convert_file(){
 			destination="$source_file_name"
 		fi
 
-		destination_sub_folder="${destination_directory%/*}"
-		destination_sub_folder="${destination_sub_folder##*/}"
+		destination_folder="${destination_directory%/*}"
+		destination_folder="${destination_folder##*/}"
 
 		# Movie nfo file path.
 		if [ -f "${source%.*}.nfo" ]; then
@@ -222,24 +229,24 @@ convert_file(){
 
 		# Rename parent folder if it same as file name.
 		if [ -n "$nfo_flag" ];then 
-			# if destination_sub_folder != source file name and destination_sub_folder != destination then add sub folder.
-			if [ "$destination_sub_folder" != "$source_file_name" ]; then
-				if [ "$destination_sub_folder" != "$destination" ]; then
+			# Add folder if destination not same as source file name and destination
+			if [ "$destination_folder" != "$source_file_name" ]; then
+				if [ "$destination_folder" != "$destination" ]; then
 					destination_directory="$destination_directory$destination/"
 				fi
-			# if destination_sub_folder = source_file_name then replace destination_sub_folder with destination.
 			else
-				destination_directory=$(echo "$destination_directory" | sed "s/$source_subfolder/$destination/")
+				# replace destination_folder with destination.
+				destination_directory=$(echo "$destination_directory" | sed "s/$source_folder/$destination/")
 			fi
 		fi
 	fi
 
-	# Rename destination_sub_folder if it is same as source file name.
-	destination_sub_folder="${destination_directory%/*}"
-	destination_sub_folder="${destination_sub_folder##*/}"
-	if [ "$source_file_name" = "$destination_sub_folder" ]; then
-		destination_directory=$(echo "$destination_directory" | sed "s/$destination_sub_folder/$destination/")
-		destination_sub_folder="$destination"
+	# Rename destination_folder if it is same as source file name.
+	destination_folder="${destination_directory%/*}"
+	destination_folder="${destination_folder##*/}"
+	if [ "$source_file_name" = "$destination_folder" ]; then
+		destination_directory=$(echo "$destination_directory" | sed "s/$destination_folder/$destination/")
+		destination_folder="$destination"
 	fi
 
 	# Audio file save as .mka in source directory.
@@ -331,7 +338,8 @@ convert_file(){
 			echo "$file_streams" | jq -r "$json_query_command" | awk -F '\t' '{printf "%-3s %-9s %-0s\n", $1, $2, $3}'
 			
 			# Read user input
-			read -p "Select the audio tracks Id's you want to keep, multiple Id's can be separated by spaces: " audio_track_user_choice
+			echo "Write audio track id's that you want to keep, multiple id's can be separated by spaces."
+			read -p "To select all tracks press ENTER:" audio_track_user_choice
 			#tr -d '[:punct:]'` to remove any punctuation from the input, ensuring that it doesn't contain special characters.
 			audio_track_user_choice=$(echo "$audio_track_user_choice" | tr -d '[:punct:]')
 		fi
@@ -862,11 +870,11 @@ process_directory() {
 						fi
 					fi
 
-					# Set same sub folder for destination as source.
+					# Set same folder for destination as source.
 					directory=$(dirname "$path")
-					subfolder="${directory#"$user_source_directory"}"
-					if [ "$directory" = "$subfolder" ]; then
-						subfolder=""
+					folder="${directory#"$user_source_directory"}"
+					if [ "$directory" = "$folder" ]; then
+						folder=""
 					fi
 
 					# Count processed files.
@@ -877,8 +885,8 @@ process_directory() {
 						# Check files
 						check_file "$path"
 					else
-						if [ -n "$subfolder" ];then
-							destination="$input_destination$subfolder/"
+						if [ -n "$folder" ];then
+							destination="$input_destination$folder/"
 						else
 							destination="$input_destination"
 						fi
@@ -890,7 +898,7 @@ process_directory() {
 				fi
 			done
 		fi
-		subfolder=""
+		folder=""
 	done
 }
 
@@ -929,20 +937,6 @@ while [ $# -gt 0 ]; do
 		-h|--help)
 			echo "Usage:"
 			echo "$(basename "$0") [-a index [index ...]] [-c] [-d] [-o] [-s] [-t] [-v] [source] [destination]"
-			echo "  If no parameters are provided, default source and destination are used."
-			echo "  Default source is $DEFAULT_SOURCE"
-			echo "  Default destination for movies is $DEFAULT_MOVIE_DESTINATION"
-			echo "  Default destination for TV shows is $DEFAULT_TV_SHOWS_DESTINATION"
-			echo "  Languages selection priority:"
-			for language in $LANGUAGES;do
-				language_number=$((language_number + 1))
-				printf "\t%s\n" "$language_number. $language"
-			done
-			echo "  Source can be file or directory."
-			echo "  Destination can be only directory."
-			echo "  Supported files extensions $EXTENSIONS"
-			echo "  If one parameter is provided, it is considered as the source."
-			echo "  If two parameters are provided the first is source, second is destination."
 			echo "  -a, --audio		Specify audio tracks (space-separated list of FFmpeg indexes)."
 			echo "  -c, --check		Checks file for errors."
 			echo "  -d, --debug		Enables script debugging."
@@ -950,14 +944,28 @@ while [ $# -gt 0 ]; do
 			echo "  -s, --skip		Skip files that do not need audio/subtitle conversation/removal."
 			echo "  -t, --test		Print only FFmepg commands (dry run)."
 			echo "  -v, --video		Excludes video. Output only audio and subtitles."
-			echo "Example:"
+			echo "  If no source or destination are provided then defaults are used."
+			echo "  Default source is: $DEFAULT_SOURCE"
+			echo "  Default destination for movies is: $DEFAULT_MOVIE_DESTINATION"
+			echo "  Default destination for TV shows is: $DEFAULT_TV_SHOWS_DESTINATION"
+			echo "  If one parameter is provided, it is considered as the source."
+			echo "  If two parameters are provided the first is source, second is destination."
+			echo "  Source can be file or directory."
+			echo "  Destination can be only directory."
+			echo "  Supported files extensions: $EXTENSIONS"
+			echo "  Languages selection priority:"
+			for language in $LANGUAGES;do
+				language_number=$((language_number + 1))
+				printf "\t\t\t\t%s\n" "$language_number. $language"
+			done
+			echo "Examples:"
 			echo "  $(basename "$0")			# Use default source and destination."
-			echo "  $(basename "$0") source		# Use source as specified."
+			echo "  $(basename "$0") source		# Use specified source and default destination."
 			echo "  $(basename "$0") -c source		# Check specified source for errors."
-			echo "  $(basename "$0") -a 1 3 source	# Select 1 and 3 audio tracks"
-			echo "  $(basename "$0") -v source		# Do not add video to output file."
+			echo "  $(basename "$0") -a 1 3 source	# Select 1 and 3 audio tracks. Use specified source and default destination."
+			echo "  $(basename "$0") -v -a 0 source	# Use specified source and default destination to output all audio tracks (without video and do not prompt user choice)."
 			echo "  $(basename "$0") -t source		# Dry run without actual conversation."
-			echo "  $(basename "$0") source destination	# Use specified source and destination."
+			echo "  $(basename "$0") -s source destination # Skip files and use specified source and destination."
 			exit 0
 			;;
 		-o|--overwrite)
