@@ -4,9 +4,9 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2025-12-27]															#
-# Version: [1.6]																#
-# Fix: move TV series nfo files													#
+# Date: [2026-01-10]															#
+# Version: [1.6.2]																#
+# Fix: convert files to mkv														#
 #################################################################################
 
 # Record script start time.
@@ -56,7 +56,7 @@ TEST_FLAG="" # Dry run conversation.
 AUDIO_FLAG="" # Select only preferred audio tracks.
 SKIP_FLAG="" # Skip files that do not need audio/subtitle conversation/removal."
 
-# Function to store error and output to screen.
+# Function to store and output to screen error messages.
 error() {
 	errors="$errors$1\n"
 	printf "\033[01;31m⚠️ $1\033[0m\n"
@@ -103,12 +103,40 @@ convert_file(){
 
 	# Extract the parent directory of the source path.
 	source_folder="${source%/*}" # /path/folder/file
-	source_folder="${source_folder##*/}"
+	source_folder="${source_folder##*/}" # folder
 	source_directory=$(dirname "$source")"/"
+
+	# FFprobe command to extract video, audio and subtitles information.
+	if ! file_streams="$(ffprobe -v error -print_format json -show_entries stream=index,codec_type,codec_name:stream_tags=language,title "$source")";then
+		error "Extracting stream information from ${1#"$source_directory"}."
+		return 1
+	fi
+
+	file_streams=$(echo "$file_streams" | jq -r '[.streams[]|{index: .index, codec_name: .codec_name, codec_type: .codec_type, language: .tags.language, title: .tags.title}]')
+	if [ -n "$file_streams" ]; then
+		json_query_command='(["ID:","CODEC:","TYPE:","LANGUAGE:","TITLE:"]), (.[] | [.index, .codec_name, .codec_type, .language, .title]) | @tsv'
+		echo "Source file: $source"
+		echo "$file_streams" | jq -r "$json_query_command" | awk -F '\t' '{printf "%-3s %-17s %-9s %-9s %-0s\n", $1, $2, $3, $4, $5}'
+	fi
+
+	# Get video streams codecs.
+	video_codecs=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video") | .codec_name')
+
+	# Check if any video codec is supported.
+	video_codec_supported=""
+	for video_codec in $video_codecs; do
+		# Check if the codec is in the SUPPORTED_VIDEO_CODECS array.
+		for supported_video_codec in $SUPPORTED_VIDEO_CODECS; do
+			if [ "$supported_video_codec" = "$video_codec" ]; then
+				video_codec_supported=true
+				break 2  # Breaks out of both the inner and outer loops.
+			fi
+		done
+	done
 
 	# Make destination file name from destination path and source file name.
 	source_extension=$(echo "$source" | awk -F. '{print $NF}')
-	if [ "$source_extension" =  "m2ts" ] || [ "$source_extension" = "ts" ] || [ "$source_extension" = "avi" ]  ; then
+	if [ -n "$video_codec_supported" ] && [ "$source_extension" != "mka" ]; then
 		destination_extension="mkv"
 	else
 		destination_extension="$source_extension"
@@ -118,7 +146,7 @@ convert_file(){
 	source_file_name="${source_file_name%.*}" # File name without extension.
 
 	destination_folder="${destination_directory%/*}" # /path/folder/file
-	destination_folder="${destination_folder##*/}"
+	destination_folder="${destination_folder##*/}"	 # folder
 
 	# Clean symbols in source_file_name.
 	renamed_file_name=$source_file_name
@@ -254,19 +282,6 @@ convert_file(){
 		destination="$destination_directory$destination.$destination_extension"
 	fi
 
-	echo "Source file: $source"
-	# FFprobe command to extract video, audio and subtitles information.
-		 if ! file_streams="$(ffprobe -v error -print_format json -show_entries stream=index,codec_type,codec_name:stream_tags=language,title "$source")";then
-			error "Extracting stream information from ${1#"$source_directory"}."
-			return 1
-		fi
-
-	file_streams=$(echo "$file_streams" | jq -r '[.streams[]|{index: .index, codec_name: .codec_name, codec_type: .codec_type, language: .tags.language, title: .tags.title}]')
-	if [ -n "$file_streams" ]; then
-		json_query_command='(["ID:","CODEC:","TYPE:","LANGUAGE:","TITLE:"]), (.[] | [.index, .codec_name, .codec_type, .language, .title]) | @tsv'
-		echo "$file_streams" | jq -r "$json_query_command" | awk -F '\t' '{printf "%-3s %-17s %-9s %-9s %-0s\n", $1, $2, $3, $4, $5}'
-	fi
-
 	# Select audio tracks based on preferred and fallback languages.
 	selected_audio_tracks=""
 	audio_language=""
@@ -361,21 +376,6 @@ convert_file(){
 			audio_track_user_choice=""
 		fi
 	fi
-
-	# Get video streams codecs.
-	video_codecs=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video") | .codec_name')
-
-	# Check if any video codec is supported.
-	video_codec_supported=""
-	for video_codec in $video_codecs; do
-		# Check if the codec is in the SUPPORTED_VIDEO_CODECS array.
-		for supported_video_codec in $SUPPORTED_VIDEO_CODECS; do
-			if [ "$supported_video_codec" = "$video_codec" ]; then
-				video_codec_supported=true
-				break
-			fi
-		done
-	done
 
 	# Select subtitles.
 	subtitle_language=""
@@ -565,9 +565,7 @@ convert_file(){
 		fi
 
 		if [ -z "$NO_VIDEO_FLAG" ]; then
-
 			for source_nfo_file in .nfo movie.nfo tvshow.nfo;do
-				
 				# Create source and destination nfo file path.
 				if [ "$source_nfo_file" = ".nfo" ]; then 
 					destination_nfo_file="${destination%.*}$source_nfo_file"
@@ -607,8 +605,9 @@ convert_file(){
 						-d '//original_filename' \
 						-d '//user_note' \
 						"$source_nfo_file" > "$destination_nfo_file"; then
-							rm "$source_nfo_file"
 							echo "Clean $destination_nfo_file"
+							echo "rm $source_nfo_file"
+							rm "$source_nfo_file"
 						else
 							error "Failed clean $source_nfo_file"
 						fi
@@ -895,10 +894,11 @@ for program in ffprobe ffmpeg; do
 	fi
 done
 
-# Set default source and destination
+# Set default source and destination.
 source="$DEFAULT_SOURCE"
 destination="$DEFAULT_TV_SHOWS_DESTINATION"
 
+# Handle user parameters.
 while [ $# -gt 0 ]; do
 	case "$1" in
 		-a|--audio)
@@ -1027,15 +1027,15 @@ if [ "$processed_files_count" -gt 1 ]; then
 
 	# Output successful FFmpeg commands.
 	if [ -n "$messages_without_mistakes" ]; then
-			echo "$job_separator"
-			if [ -n "$CHECK_FLAG" ]; then
-				echo "✅ Successful checks:"
-			elif [ -n "$TEST_FLAG" ]; then
-				echo "All FFmpeg commands:"
-			else
-				echo "✅ Successful conversations:"
-			fi
-			printf "\033[01;32m$messages_without_mistakes\033[00m"
+		echo "$job_separator"
+		if [ -n "$CHECK_FLAG" ]; then
+			echo "✅ Successful checks:"
+		elif [ -n "$TEST_FLAG" ]; then
+			echo "All FFmpeg commands:"
+		else
+			echo "✅ Successful conversations:"
+		fi
+		printf "\033[01;32m$messages_without_mistakes\033[00m"
 	fi
 
 	# Output files with errors.
