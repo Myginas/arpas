@@ -4,9 +4,9 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-01-10]															#
-# Version: [1.6.2]																#
-# Fix: convert files to mkv														#
+# Date: [2026-01-29]															#
+# Version: [1.6.3]																#
+# Fix: less FFmpeg output														#
 #################################################################################
 
 # Record script start time.
@@ -75,14 +75,14 @@ confirm_last_character() {
 # Function to convert bytes to human readable form.
 human_readable_size(){
 	SIZE="$1" # input size in bytes
-	UNITS="B KiB MiB GiB TiB PiB" # list of unit prefixes.
+	UNITS="B KB MB GB TB PB" # list of unit prefixes.
 
 	# Iterate through the units, starting from the smallest and working our way up.
 	for UNIT in $UNITS; do
-		test "${SIZE%.*}" -lt 1024 && break;
+		test "${SIZE%.*}" -lt 1000 && break;
 
-		# Divide the size by 1024 to get a new value for the next unit.
-		SIZE=$(awk "BEGIN {printf \"%.2f\",${SIZE}/1024}")
+		# Divide the size by 1000 to get a new value for the next unit.
+		SIZE=$(awk "BEGIN {printf \"%.2f\",${SIZE}/1000}")
 	done
 
 	# if the unit is still "B" at this point, it means we've already converted the size to bytes. 
@@ -102,9 +102,9 @@ convert_file(){
 	destination_directory="$2"
 
 	# Extract the parent directory of the source path.
-	source_folder="${source%/*}" # /path/folder/file
+	source_folder="${source%/*}" # /path/folder/file.extension
 	source_folder="${source_folder##*/}" # folder
-	source_directory=$(dirname "$source")"/"
+	source_directory=$(dirname "$source")"/" #/path/folder
 
 	# FFprobe command to extract video, audio and subtitles information.
 	if ! file_streams="$(ffprobe -v error -print_format json -show_entries stream=index,codec_type,codec_name:stream_tags=language,title "$source")";then
@@ -420,7 +420,16 @@ convert_file(){
 
 	# Build the FFmpeg command.
 	# -xerror -fflags +fastseek -max_muxing_queue_size 999 -bitexact
-	ffmpeg_command="ffmpeg -xerror -err_detect explode -flags -global_header -hide_banner -i \"$source\""
+	ffmpeg_command="ffmpeg"
+
+	# Do not prompt to overwrite existing files.
+	if [ -n "$OVERWRITE_FLAG" ]; then
+		ffmpeg_command="$ffmpeg_command -y"
+	# Do not overwrite existing files when skipping files.
+	elif [ -n "$SKIP_FLAG" ]; then
+		ffmpeg_command="$ffmpeg_command -n"
+	fi
+	ffmpeg_command="$ffmpeg_command -hide_banner -xerror -loglevel warning -stats -i \"$source\""
 
 	# Do not output video.
 	if [ -n "$NO_VIDEO_FLAG" ]; then
@@ -500,14 +509,6 @@ convert_file(){
 			error "Skipping (${1#"$source_directory"}) because do not need to convert this file."
 			return 1
 		fi
-	fi
-
-	# Do not prompt to overwrite existing files.
-	if [ -n "$OVERWRITE_FLAG" ]; then
-		ffmpeg_command="$ffmpeg_command -y"
-	# Do not overwrite existing files when skipping files.
-	elif [ -n "$SKIP_FLAG" ]; then
-		ffmpeg_command="$ffmpeg_command -n"
 	fi
 
 	# Finish of creating ffmpeg command.
