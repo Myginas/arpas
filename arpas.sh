@@ -4,13 +4,13 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-02-25]															#
-# Version: [1.6.4]																#
-# Fix: Debug, Folder creation for TV series, boolean variables					#
+# Date: [2026-04-07]															#
+# Version: [1.7]																#
+# Add: Check essential program jq. Debug line numbers. Multiple video streams	#
+#	support. Professional audio track selection.								#
+# Fix: ffmpeg do not fail if choose not overwrite file. POSIX.1-2024 complains.	#
+#		Movie folder creation.													#
 #################################################################################
-
-# Record script start time.
-script_start_time=$(date +%s)
 
 # Loop through all command-line arguments to check for "-d" or "--debug"
 DEBUG=false
@@ -24,12 +24,16 @@ unset script_argument
 
 # Enable debugging.
 if $DEBUG; then
+	unset DEBUG
 	if command -v shellcheck > /dev/null 2>&1; then
 		shellcheck "$0"
 	fi
+	PS4='${LINENO}:'
 	set -x
 fi
-unset DEBUG
+
+# Record script start time.
+script_start_time=$(date +%s)
 
 # Define constants. Change them to best suite you.
 readonly DEFAULT_SOURCE="/mnt/Duomenys/Matyti Filmai/arpo testai/" # Default source for movie or TV series. Can be file or directory. Used when not set source.
@@ -61,7 +65,10 @@ SKIP_FLAG=false # Skip files that do not need audio/subtitle conversation/remova
 # Function to store and output to screen error messages.
 error() {
 	errors="$errors$1\n"
-	printf '\033[01;31m⚠️ %b\033[0m\n' "$1"
+	# Print when second parameter not given.
+	if [ -z "$2" ]; then
+		printf '\e[38;5;196m⚠️ %b\e[0m\n' "$1"
+	fi
 }
 
 # Function to ensure last character of string.
@@ -100,19 +107,19 @@ human_readable_size(){
 
 # Main function to rename file, remove video, audio, subtitles and convert unsupported audio tracks.
 convert_file(){
-	source="$1"
+	source="$1" # Source /path/folder/file.extension 
 
-	destination="$2"
-	destination_directory="$2"
+	destination="$2" # Destination /path/ in future will be /path/folder/file.extension
+	destination_directory="$2" # Destination /path/
 
 	# Extract the parent directory of the source path.
-	source_folder="${source%/*}" # /path/folder/file.extension
-	source_folder="${source_folder##*/}" # folder
-	source_directory=$(dirname "$source")"/" # /path/folder
+	source_directory=$(dirname "$source") # /path/folder
+	source_folder="${source_directory##*/}" # folder
+	source_directory="$source_directory/" # /path/folder/
 
 	# FFprobe command to extract video, audio and subtitles information.
 	if ! file_streams="$(ffprobe -v error -print_format json -show_entries stream=index,codec_type,codec_name:stream_tags=language,title "$source")";then
-		error "Extracting stream information from ${1#"$source_directory"}."
+		error "Extracting stream information from ${1#"$source_directory"}." "do not print"
 		return 1
 	fi
 
@@ -123,7 +130,7 @@ convert_file(){
 	unset json_query_command
 
 	# Get video streams codecs.
-	video_codecs=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video") | .codec_name')
+	video_codecs=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video" and .codec_name != "mjpeg" and .codec_name != "jpeg" and .codec_name != "png") | .codec_name')
 
 	# Check if any video codec is supported.
 	video_codec_supported=false
@@ -235,13 +242,10 @@ convert_file(){
 			destination="$source_file_name"
 		fi
 
-		destination_folder="${destination_directory%/*}"
-		destination_folder="${destination_folder##*/}"
-
 		# Rename parent movie folder if it same as file name.
-		if [ -f "${source%.*}.nfo" ] || [ -f "$source_directory""movie.nfo" ];then
+		if [ -f "${source%.*}.nfo" ] || [ -f "$source_directory""movie.nfo" ] || [ "$source_folder" = "$source_file_name" ];then
 			# Add folder if destination not same as source file name and destination
-			if [ "$destination_folder" != "$source_file_name" ]; then
+			if [ "$source_file_name" != "$destination_folder" ]; then
 				if [ "$destination_folder" != "$destination" ]; then
 					destination_directory="$destination_directory$destination/"
 				fi
@@ -253,8 +257,6 @@ convert_file(){
 	fi
 
 	# Rename destination_folder if it is same as source file name.
-	destination_folder="${destination_directory%/*}"
-	destination_folder="${destination_folder##*/}"
 	if [ "$source_file_name" = "$destination_folder" ]; then
 		destination_directory=$(echo "$destination_directory" | sed "s/$destination_folder/$destination/")
 		destination_folder="$destination"
@@ -276,8 +278,6 @@ convert_file(){
 	fi
 
 	# Select audio tracks based on preferred and fallback languages.
-	selected_audio_tracks=""
-	audio_language=""
 	for language in $LANGUAGES; do
 		audio_tracks="$(echo "$file_streams" | jq -r --arg lang "$language" '.[] | select(.codec_type == "audio" and .language == $lang) | .index')"
 		if [ -n "$audio_tracks" ]; then
@@ -288,6 +288,7 @@ convert_file(){
 	done
 	unset language
 
+	# Select all audio tracks if not found preferred and fallback tracks.
 	if [ -z "$selected_audio_tracks" ]; then
 		# Select all audio tracks if not found preferred languages.
 		selected_audio_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio") | .index')"
@@ -296,11 +297,23 @@ convert_file(){
 	# Count selected audio track before adding commentary audio track.
 	selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c "")
 
+	# Select professional audio tracks.
+	if [ "$selected_audio_tracks_count" -gt 1 ] && [ -z "$audio_track_user_choice" ]; then
+		# "i" makes the regex case-insensitive. Matches "prof", "Prof", "PROF", etc.
+		profesional_audio_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" and .title != null) | select(.title | test("prof"; "i")) | .index')"
+		if [ -n "$profesional_audio_tracks" ]; then
+			selected_audio_tracks="$profesional_audio_tracks"
+			# Count selected audio track before adding commentary audio track.
+			selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c "")
+		fi
+		unset profesional_audio_tracks
+	fi
+
 	# Add commentary audio.
-	commentary_audio="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" and .title != null) | select(.title | contains("Commentary"))')"
+	commentary_audio="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" and .title != null) | select(.title | test("Commentary"; "i"))')"
 
 	if [ -n "$commentary_audio" ]; then
-		# Select commentary subtitles by languages.
+		# Select commentary audio by languages.
 		for language in $LANGUAGES; do
 			if [ "$language" != "$audio_language" ];then
 				commentary_audio_track=$(echo "$commentary_audio" | jq -r --arg lang "$language" '. | select(.language == $lang) | .index')
@@ -340,7 +353,8 @@ convert_file(){
 
 			# Read user input
 			echo "Write audio track id's that you want to keep, multiple id's can be separated by spaces."
-			read -p "To select all tracks press ENTER:" audio_track_user_choice
+			printf "To select all tracks press ENTER:"
+			read -r audio_track_user_choice
 			#tr -d '[:punct:]'` to remove any punctuation from the input, ensuring that it doesn't contain special characters.
 			audio_track_user_choice=$(echo "$audio_track_user_choice" | tr -d '[:punct:]')
 		fi
@@ -419,26 +433,20 @@ convert_file(){
 	unset audio_language subtitle_language
 
 	# Build the FFmpeg command.
-	# -xerror -fflags +fastseek -max_muxing_queue_size 999 -bitexact
-	ffmpeg_command="ffmpeg"
-
-	# Do not prompt to overwrite existing files.
-	if $OVERWRITE_FLAG; then
-		ffmpeg_command="$ffmpeg_command -y"
-	# Do not overwrite existing files when skipping files.
-	elif $SKIP_FLAG; then
-		ffmpeg_command="$ffmpeg_command -n"
-	fi
-	ffmpeg_command="$ffmpeg_command -hide_banner -xerror -loglevel warning -stats -i \"$source\""
-
 	# Do not output video.
 	if $NO_VIDEO_FLAG; then
-		ffmpeg_command="$ffmpeg_command -vn"
+		ffmpeg_command="-vn"
 		unset selected_destination_tracks
 		# Add video and remove title.
 	elif [ -n "$video_codecs" ]; then
-		ffmpeg_command="$ffmpeg_command -map 0:V:0 -metadata title=\"\" -c:V:0 copy -metadata:s:v title=\"\""
 		selected_video_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video" and .codec_name != "mjpeg" and .codec_name != "jpeg" and .codec_name != "png") | .index')"
+		destination_video_track_index=0
+		for selected_video_track in $selected_video_tracks; do
+			ffmpeg_command="-map 0:V:$selected_video_track -c:V:$destination_video_track_index copy -metadata:s:v:$destination_video_track_index title=\"\""
+			destination_video_track_index=$(( destination_video_track_index + 1 ))
+		done
+		ffmpeg_command="$ffmpeg_command -metadata title=\"\""
+		unset destination_video_track_index selected_video_track
 	fi
 
 	# Map audio tracks.
@@ -447,7 +455,7 @@ convert_file(){
 	done
 
 	# Add audio tracks.
-	audio_track_index=0
+	destination_audio_track_index=0
 	# Count how much audio and subtitles tracks will be copied without conversation.
 	not_changed_tracks=0
 	for audio_track in $selected_audio_tracks; do
@@ -466,20 +474,20 @@ convert_file(){
 		# Decide convert or copy audio track.
 		if $video_codec_supported || [ -z "$video_codecs" ] || $NO_VIDEO_FLAG; then
 			if $audio_codec_supported; then
-				ffmpeg_command="$ffmpeg_command -c:a:$audio_track_index copy"
+				ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
 				not_changed_tracks=$(( not_changed_tracks + 1 ))
 			else
-				ffmpeg_command="$ffmpeg_command -c:a:$audio_track_index $CONVERT_AUDIO_CODEC"
+				ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index $CONVERT_AUDIO_CODEC"
 				# Change codec name for destination screen output.
 				file_streams=$(echo "$file_streams" | jq --arg index "$audio_track" --arg codec_name "$CONVERT_AUDIO_CODEC" '.[] |= if .index == ($index | tonumber) then .codec_name = $codec_name else . end')
 			fi
 		else
-			ffmpeg_command="$ffmpeg_command -c:a:$audio_track_index copy"
+			ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
 			not_changed_tracks=$(( not_changed_tracks + 1 ))
 		fi
-		audio_track_index=$(( audio_track_index + 1 ))
+		destination_audio_track_index=$(( destination_audio_track_index + 1 ))
 	done
-	unset audio_track audio_codec audio_codec_supported audio_track_index video_codecs video_codec_supported
+	unset audio_track audio_codec audio_codec_supported destination_audio_track_index video_codecs video_codec_supported
 
 	# Add subtitles to FFmpeg command.
 	if [ -n "$subtitle_tracks" ]; then
@@ -500,57 +508,40 @@ convert_file(){
 		#	Convert files even no changes will be made to file exept renaming and copying to destination.
 		if ! $SKIP_FLAG || $NO_VIDEO_FLAG; then
 			# Copy the file with ffmpeg.
-			ffmpeg_command="ffmpeg -xerror -err_detect explode -flags -global_header -hide_banner -i \"$source\""
 			if $NO_VIDEO_FLAG; then
 				# Copy without video tracks.
-				ffmpeg_command="$ffmpeg_command -vn -c copy"
+				ffmpeg_command="-vn -c copy"
 			else
 				# Copy with video tracks.
-				ffmpeg_command="$ffmpeg_command -c copy -metadata:s:v title=\"\""
+				ffmpeg_command="-c copy -metadata:s:v title=\"\""
 			fi
 		else
 			error "Skipping (${1#"$source_directory"}) because do not need to convert this file."
+			unset ffmpeg_command selected_video_tracks selected_audio_tracks subtitle_tracks file_streams
 			return 1
 		fi
 	fi
-
-	# Finish of creating ffmpeg command.
-	ffmpeg_command="$ffmpeg_command \"$destination\""
 
 	selected_destination_tracks="$selected_video_tracks $selected_audio_tracks $subtitle_tracks"
 	unset selected_video_tracks selected_audio_tracks subtitle_tracks
 
-	# Create not existing destination directory.
-	output_directory=$(dirname "$destination")
-	if [ ! -d "$output_directory" ] && ! $TEST_FLAG; then
-		create_directory_command="mkdir -p \"$output_directory\""
-		# Create directory and check for errors.
-		if ! eval "$create_directory_command";then
-			error "FFmpeg cannot create file in not existing directory. Skipping (${source#"$source_directory"}) file."
-			return 1
-		fi
-		unset create_directory_command output_directory
-	fi
-
 	# Output destination file information.
 	# Construct the destination jq command.
-	for id in $selected_destination_tracks; do
+	for selected_destination_track in $selected_destination_tracks; do
 	# Append selected indexes to jq command.
 		if [ -z "$json_query_command" ]; then
-			json_query_command="$id"
+			json_query_command="$selected_destination_track"
 		else 
-			json_query_command="$json_query_command,$id"
+			json_query_command="$json_query_command,$selected_destination_track"
 		fi
 	done
-	unset id selected_destination_tracks
+	unset selected_destination_track selected_destination_tracks
 
 	json_query_command='[ "ID:", "CODEC:", "TYPE:", "LANGUAGE:", "TITLE:"], (.['"$json_query_command] | {index: .index, codec_name: .codec_name, codec_type: .codec_type, language: .language, title: .title} | [.index, .codec_name, .codec_type, .language, .title]) | @tsv"
 	echo
 	echo "Destination file: $destination"
 	echo "$file_streams" | eval "jq -r '$json_query_command'" | awk -F '\t' '{printf "%-3s %-17s %-9s %-9s %-0s\n", $1, $2, $3, $4, $5}'
 	unset file_streams json_query_command
-	echo
-	echo "$ffmpeg_command"
 
 	# Check if source and destination are the same.
 	if [ "$source" -ef "$destination" ] && ! $TEST_FLAG; then
@@ -558,19 +549,66 @@ convert_file(){
 		return 1
 	fi
 
-	# Record the FFmpeg start time.
+	# -xerror -fflags +fastseek -max_muxing_queue_size 999 -bitexact
+	ffmpeg_command="-hide_banner -xerror -loglevel warning -stats -i \"$source\" $ffmpeg_command \"$destination\""
+
+	# Do not prompt ffmpeg to overwrite existing files.
+	allow_run_ffmpeg=true 
+	if $OVERWRITE_FLAG; then
+		ffmpeg_command="-y $ffmpeg_command"
+	# Do not overwrite existing files when skipping files.
+	elif $SKIP_FLAG; then
+		ffmpeg_command="-n $ffmpeg_command"
+	# Overide ffmpeg interactive file overwrite prompt, because it returns 0 when select "N"
+	elif [ -f "$destination" ] && ! $TEST_FLAG; then
+		printf "File '%s' already exists. Overwrite? [y/N]" "$destination"
+		read -r file_overwrite_user_choice
+		case "$file_overwrite_user_choice" in
+			y|Y)
+				ffmpeg_command="-y $ffmpeg_command"
+				;;
+			*)
+				ffmpeg_command="-n $ffmpeg_command"
+				allow_run_ffmpeg=false
+				;;
+		esac
+		unset file_overwrite_user_choice
+	fi
+
+	ffmpeg_command="ffmpeg $ffmpeg_command"
+	echo
+	echo "$ffmpeg_command"
+
+	# Record the FFmpeg start time also for dry run.
 	ffmpeg_start_time=$(date +%s)
 
 	if ! $TEST_FLAG; then
+		# Create not existing destination directory.
+		output_directory=$(dirname "$destination")
+		if [ ! -d "$output_directory" ] && $allow_run_ffmpeg; then
+			create_directory_command="mkdir -p \"$output_directory\""
+			# Create directory and check for errors.
+			if ! eval "$create_directory_command";then
+				error "FFmpeg cannot create file in not existing directory. Skipping (${source#"$source_directory"}) file."
+				unset allow_run_ffmpeg create_directory_command output_directory
+				return 1
+			fi
+			unset create_directory_command output_directory
+		fi
+
 		# Run FFmpeg command and check FFmpeg errors.
-		if ! eval "$ffmpeg_command";then
+		if ! eval "$ffmpeg_command" || ! $allow_run_ffmpeg;then
 			# Record the FFmpeg end time.
 			ffmpeg_end_time=$(date +%s)
 			ffmpeg_run_time=$((ffmpeg_end_time - ffmpeg_start_time))
-			error "$ffmpeg_command"
+			if $allow_run_ffmpeg;then
+				error "$ffmpeg_command"
+			else
+				error "$ffmpeg_command" "do not print"
+			fi
+			unset ffmpeg_command allow_run_ffmpeg
 			return 1
 		fi
-
 		if ! $NO_VIDEO_FLAG; then
 			for source_nfo_file in .nfo movie.nfo tvshow.nfo;do
 				# Create source and destination nfo file path.
@@ -641,7 +679,7 @@ convert_file(){
 			escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\?/\\?/g')	# Escape ?
 
 			kodi_files=$(find "$source_directory" -maxdepth 1 -type f -name "$escaped_source_file_name*" -not -name "$escaped_source_file_name.$source_extension")
-			unset escaped_source_file_name
+			unset escaped_source_file_name source_extension
 
 			if [ -n "$kodi_files" ]; then
 				#IFS` determines which characters separate the fields in each line of data.
@@ -665,25 +703,25 @@ convert_file(){
 
 			# move kodi files that does not start same as file name.
 			kodi_files=$(find "$source_directory" -maxdepth 1 -type f \( -name tvshow.nfo \
-				-o -name poster.* \
-				-o -name movie.* \
-				-o -name folder.* \
-				-o -name cover.* \
-				-o -name fanart* \
-				-o -name backdrop* \
-				-o -name banner.* \
-				-o -name clearart.* \
-				-o -name disc.* \
-				-o -name discart.* \
-				-o -name thumb.* \
-				-o -name landscape.* \
-				-o -name clearlogo.* \
-				-o -name logo.* \
-				-o -name keyart.* \
-				-o -name characterart.* \
-				-o -name season* \
-				-o -name tvshow-trailers.* \
-				-o -name trailer.* \))
+				-o -name "poster.*" \
+				-o -name "movie.*" \
+				-o -name "folder.*" \
+				-o -name "cover.*" \
+				-o -name "fanart*" \
+				-o -name "backdrop*" \
+				-o -name "banner.*" \
+				-o -name "clearart.*" \
+				-o -name "disc.*" \
+				-o -name "discart.*" \
+				-o -name "thumb.*" \
+				-o -name "landscape.*" \
+				-o -name "clearlogo.*" \
+				-o -name "logo.*" \
+				-o -name "keyart.*" \
+				-o -name "characterart.*" \
+				-o -name "season*" \
+				-o -name "tvshow-trailers.*" \
+				-o -name "trailer.*" \))
 
 			if [ -n "$kodi_files" ];then
 
@@ -708,10 +746,10 @@ convert_file(){
 				if [ -d "$source_directory$kodi_folder" ]; then
 					move_file_command="rsync -av --remove-source-files \"$source_directory$kodi_folder\" \"$destination_directory$kodi_folder\""
 					echo "$move_file_command"
-					if ! eval "$move_file_command";then
-						error "moving \"$source_directory$kodi_folder\" folder."
-					else
+					if eval "$move_file_command";then
 						rmdir "$source_directory$kodi_folder"
+					else
+						error "moving \"$source_directory$kodi_folder\" folder."
 					fi
 				fi
 			done
@@ -777,7 +815,7 @@ convert_file(){
 	# Output saved disk size of every file.
 	if [ "$size_difference" -gt 0 ]; then
 		saved_size="Saved: $(human_readable_size $size_difference) and it took $formatted_time to do so."
-		printf '\033[01;32m%s\033[00m\n' "$saved_size"
+		printf '\e[92m%s\e[0m\n' "$saved_size"
 	else
 		error "${destination#"$input_destination"} is same size as source"
 		return	1
@@ -831,7 +869,7 @@ check_file(){
 			ffmpeg_run_time=$((ffmpeg_end_time - ffmpeg_start_time))
 			formatted_time=$(date -u -d @"$ffmpeg_run_time" +"%T")
 
-			printf '\033[01;32m✅ %s. Check took %s to do so.\033[0m\n' "$1" "$formatted_time"
+			printf '\e[92m✅ %s. Check took %s to do so.\e[0m\n' "$1" "$formatted_time"
 			messages_without_mistakes="$messages_without_mistakes$1\n"
 			unset ffmpeg_command ffmpeg_start_time ffmpeg_end_time ffmpeg_run_time formatted_time
 		fi
@@ -866,7 +904,7 @@ process_directory() {
 					fi
 
 					# Change job separator lenght by terminal width.
-					if command -v "tput" > /dev/null 2>&1; then
+					if $TPUT_EXIST; then
 						if [ "$(tput cols)" -ne "$terminal_columns" ]; then
 							terminal_columns=$(tput cols)
 							job_separator=$(printf '%*s' "$terminal_columns" " " | tr ' ' '-')
@@ -911,12 +949,19 @@ process_directory() {
 
 # Program beginning:
 # Check essential programs for script.
-for program in ffprobe ffmpeg; do
+for program in ffprobe ffmpeg jq; do
 	if ! command -v "$program" > /dev/null 2>&1; then
 		error "$program is not installed. Please install it first"
 		exit 1
 	fi
 done
+
+# Check if exist tput program.
+if command -v "tput" > /dev/null 2>&1; then
+	TPUT_EXIST=true
+else
+	TPUT_EXIST=false
+fi
 
 # Set default source and destination.
 source="$DEFAULT_SOURCE"
@@ -1062,13 +1107,13 @@ if [ "$processed_files_count" -gt 1 ]; then
 		else
 			echo "✅ Successful conversations:"
 		fi
-		printf '\033[01;32m%b\033[00m' "$messages_without_mistakes"
+		printf '\e[92m%b\e[0m' "$messages_without_mistakes"
 	fi
 
 	# Output files with errors.
 	if [ -n "$errors" ]; then
 		echo "$job_separator"
-		printf 'Files with errors is:\n\033[01;31m%b\033[00m' "$errors"
+		printf 'Files with errors is:\n\e[38;5;196m%b\e[0m' "$errors"
 	fi
 
 	# Record the end time.
@@ -1086,5 +1131,7 @@ if [ "$processed_files_count" -gt 1 ]; then
 		echo "$processed_files_count files check complete in $script_execution_time"
 	elif [ "$total_size_difference" -gt "$size_difference" ]; then
 		echo "Total saved: $(human_readable_size $total_size_difference) and it took $script_execution_time to do so."
+	else
+		echo "Do not saved anything but it took $script_execution_time to do so."
 	fi
 fi
