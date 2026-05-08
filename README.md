@@ -8,13 +8,13 @@ Shell script for batch processing media files. It removes unnecessary audio and 
 - Converts unsupported audio codecs to a specified format (default: libvorbis)
 - Renames files with cleaned-up, readable names
 - Handles both single files and directories (recursively)
-- Supports a wide range of video and audio file extensions
 - Designed for automation with minimal user interaction
 
 ## Requirements
 
 - [ffmpeg](https://ffmpeg.org/)
 - ash (or compatible shell)
+- jq (command-line JSON processor)
 
 ## Usage
 
@@ -33,7 +33,7 @@ If you provide a directory, all media files in that directory will be processed.
 
 ## Customization
 
-You can edit `arpas.sh` to adjust which codecs or languages to keep. The script is annotated for easy modification.
+You can edit `arpas.cfg` to adjust which codecs or languages to keep. The script is annotated for easy modification.
 
 ### Options
 
@@ -75,4 +75,4 @@ You can edit `arpas.sh` to adjust which codecs or languages to keep. The script 
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0. See the LICENSE file for details.
+This project is licensed under the GNU General Public License v2.0. See the LICENSE file for details.
