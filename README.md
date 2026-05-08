@@ -1,15 +1,34 @@
 # arpas
 
-Shell script for batch processing media files. It removes unnecessary audio and subtitle tracks, converts unsupported audio codecs, and renames files using [ffmpeg](https://ffmpeg.org/).
+Shell script for batch processing media files
 
-## Features
+## Features:
+**Media File Conversion:**
+- Removes unnecessary audio and subtitle tracks
+- Converts unsupported audio codecs to a compatible format (default: Vorbis)
 
-- Removes unnecessary audio and subtitle tracks from media files
-- Converts unsupported audio codecs to a specified format (default: libvorbis)
+**Intelligent File Renaming - Automatically:**
 - Renames files with cleaned-up, readable names
-- Handles both single files and directories (recursively)
-- Designed for automation with minimal user interaction
+- Normalizes TV series names to standard format (S##E## pattern)
+- Normalizes Movies names to movie name (release years)
+- Cleans up special characters and formatting
 
+**Smart Track Selection:**
+- Selects preferred audio/subtitle languages in priority order (default: Lithuanian, English, Russian)
+- Prefers professional audio tracks when multiple options exist
+- Prioritizes SubRip subtitles over HDMV PGS format
+- Supports fallback languages and commentary track inclusion
+
+**Metadata Management:**
+- Cleans NFO (metadata) files using xmlstarlet to remove unwanted tags
+- Moves associated Kodi files (fanart, posters, thumbnails, etc.) to destination
+- Transfers audio/subtitle titles from existing destination files
+- Matches source and destination file modification dates
+
+**File Organization:**
+- Handles both single files and directories (recursively)
+- Automatically organizes files into TV shows or movie folders based on detected patterns
+- Loads settings from optional arpas.cfg configuration file
 ## Requirements
 
 - [ffmpeg](https://ffmpeg.org/)
