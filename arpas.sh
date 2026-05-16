@@ -4,16 +4,11 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-05-05]															#
-# Version: [1.8]																#
-# Add: Source and destination file size output. Before overwriting output		#
-#	destination file information. Prefer professional subtitles. Config file.	#
-#	Import audio and subtitle track title from existing file. 					#
-#	Prefer select subrip over hdmv_pgs_subtitles.								#
-# Fix: Professional audio selection for cyrillic titles. Audio selection logic.	#
-#	selected audio tracks count. Commentary audio fallback.	ffmpeg could not	#
-#	find codec parameter warning.												#
-# Remove: Do not include selected language and fall back languages.				#
+# Date: [2026-05-13]															#
+# Version: [1.8.1]																#
+# Add: 		--verbose script parameter for set_default_variables function.		#
+# Fix: 		set_default_variable AUDIO_FLAG.									#
+# Change:	config file name to _arpas.cfg										#
 #################################################################################
 
 # Loop through all command-line arguments to check for "-d" or "--debug"
@@ -40,11 +35,11 @@ fi
 script_start_time=$(date +%s)
 
 # Global variables declaration.
-total_size_difference=0 # Global variable to keep track of total file size difference.
-errors="" # Global variable to keep track files with conversation errors.
-messages_without_mistakes="" # Global variable to keep track files without conversation errors.
+total_size_difference=0 # Total file size difference.
+errors="" # Files with conversation/check errors.
+messages_without_mistakes="" # Files without conversation/check errors.
 size_difference=0 # Difference in bytes between source and destination files.
-ffmpeg_run_time=0 # Time to complete FFmpeg command in seconds.
+ffmpeg_run_time=0 # Time to complete one FFmpeg command in seconds.
 processed_files_count=0 # Count processed files.
 
 # Function to handle empty variables and set defaults.
@@ -55,7 +50,7 @@ set_default_variables() {
 	case "$var_type" in
 		"constant string")
 			if eval "[ -z \"\${$var_name}\" ]"; then
-				if $print_config_error; then
+				if $VERBOSE_FLAG && ! $HELP_FLAG ; then
 					printf '%s is not set, setting to default value: %s\n' "$var_name" "$default_value"
 				fi
 				eval readonly "$var_name='$default_value'"
@@ -63,7 +58,7 @@ set_default_variables() {
 			;;
 		"variable string")
 			if eval "[ -z \"\${$var_name}\" ]"; then
-				if $print_config_error; then
+				if $VERBOSE_FLAG && ! $HELP_FLAG; then
 					printf '%s is not set, setting to default value: %s\n' "$var_name" "$default_value"
 				fi
 				eval "$var_name='$default_value'"
@@ -71,20 +66,26 @@ set_default_variables() {
 			;;
 		integer)
 			if ! eval "printf '%s\n' \"\$$var_name\"" | grep -qE '^[0-9]+$'; then
+				if $VERBOSE_FLAG && ! $HELP_FLAG; then
 					printf '%s is not an number, setting to default value: %s\n' "$var_name" "$default_value"
-					eval "$var_name='$default_value'"
+				fi
+				eval "$var_name='$default_value'"
 			fi
 			;;
 		boolean)
 			if ! eval "printf '%s\n' \"\$$var_name\"" | grep -qE '^(true|false)$'; then
-				printf '%s is not a boolean (true/false), setting to default value: %s\n' "$var_name" "$default_value"
+				if $VERBOSE_FLAG && ! $HELP_FLAG; then
+					printf '%s is not a boolean (true/false), setting to default value: %s\n' "$var_name" "$default_value"
+				fi
 				eval "$var_name='$default_value'"
 			fi
 			;;
 		"numerical list")
 			if eval "[ -n \"\${$var_name}\" ]"; then
 				if ! eval "printf '%s\n' \"\$$var_name\"" | grep -qE '^[0-9]+([, ]+[0-9]+)*$'; then
-					printf '%s does not contain a valid numerical list (numbers separated by commas or spaces), seting it to empty.\n' "$var_name"
+					if $VERBOSE_FLAG && ! $HELP_FLAG; then
+						printf '%s does not contain a valid numerical list (numbers separated by commas or spaces), seting it to empty.\n' "$var_name"
+					fi
 					eval "$var_name=\"\""
 				fi
 			fi
@@ -173,7 +174,7 @@ convert_file(){
 		for supported_video_codec in $SUPPORTED_VIDEO_CODECS; do
 			if [ "$supported_video_codec" = "$video_codec" ]; then
 				video_codec_supported=true
-				break 2  # Breaks out of both the inner and outer loops.
+				break 2 # Breaks out of both the inner and outer loops.
 			fi
 		done
 	done
@@ -398,7 +399,7 @@ convert_file(){
 	fi
 
 	# Output existing destination file information.
-	if [ -f  "$destination" ]; then
+	if [ -f "$destination" ]; then
 		if destination_file_streams="$(ffprobe -v error -print_format json -show_entries stream=index,codec_type,codec_name:stream_tags=language,title "$destination")";then
 			destination_file_streams=$(echo "$destination_file_streams" | jq -r '[.streams[]|{index: .index, codec_name: .codec_name, codec_type: .codec_type, language: .tags.language, title: .tags.title}]')
 			echo
@@ -511,7 +512,7 @@ convert_file(){
 		destination_subtitle_titles_count=$(echo "$destination_subtitle_titles" | grep -c '[^[:space:]]')
 		source_subtitle_title="$(echo "$file_streams" | jq -r --arg lang "$subtitle_language" '.[] | select(.codec_type == "subtitle" and .language == $lang and .title != null) | .title')"
 		if [ -z "$source_subtitle_title" ] && [ "$destination_subtitle_titles_count" -eq 1 ]; then
-			printf 'Source subtitle track %s, lang:%s does not have title. Overwrite it from destination file with "%s"? [y/N] ' "$subtitle_tracks" "$subtitle_language" "$destination_subtitles_titles"
+			printf 'Source subtitle track %s, lang:%s does not have title. Overwrite it from destination file with "%s"? [y/N] ' "$subtitle_tracks" "$subtitle_language" "$destination_subtitle_titles"
 			read -r transfer_subtitle_title_user_choice
 			case "$transfer_subtitle_title_user_choice" in
 				y|Y)
@@ -1103,24 +1104,38 @@ else
 	TPUT_EXIST=false
 fi
 
-# Load config variables from file arpas.cfg
-print_config_error=true
-config_file="${0%.*}.cfg"
+# Print verbose messages only when not given -h or --help script argument.
+HELP_FLAG=false # Used to do not print messages in set_default_variables function.
+for script_argument in "$@"; do
+	if [ "$script_argument" = "-h" ] || [ "$script_argument" = "--help" ]; then
+		HELP_FLAG=true
+		break
+	fi
+done
+unset script_argument
+
+VERBOSE_FLAG=false # Print detail messages of constants and variables declaration in set_default_variables function.
+
+# Load config variables from file _arpas.cfg
+config_file="$(basename "$0")"
+config_file="./_${config_file%.*}.cfg"
 if [ -f "$config_file" ];then
 	. "$config_file"
 else
-	# Print error only when not given -h or --help script argument.
-	for script_argument in "$@"; do
-		if [ "$script_argument" = "-h" ] || [ "$script_argument" = "--help" ]; then
-			print_config_error=false
-			break
-		fi
-	done
-	if $print_config_error ;then 
+	if ! $HELP_FLAG ;then
 		printf 'Do not found configuration file %s.\n' "$config_file"
 	fi
 fi
-unset script_argument config_file
+unset config_file
+
+# Overide user VERBOSE_FLAG from config file with user given parameter.
+for script_argument in "$@"; do
+	if [ "$script_argument" = "--verbose" ]; then
+		VERBOSE_FLAG=true
+		break
+	fi
+done
+unset script_argument
 
 # Fallback constants declaration:
 set_default_variables "constant string" DEFAULT_SOURCE "/path/folder/" # or /path/folder/file.ext, used when not given with script parameters.
@@ -1132,11 +1147,21 @@ set_default_variables "variable string" EXTENSIONS ".mkv .avi .mka .mp4 .m2ts .t
 set_default_variables "constant string" SUPPORTED_VIDEO_CODECS "h264 hevc av1 vp9 vp8" # Convert audio with these video codecs.
 set_default_variables "constant string" SUPPORTED_AUDIO_CODECS "vorbis aac mp3 opus flac" # Do not convert audio with these audio codecs.
 
+# Fallback global variables declaration.
+set_default_variables integer terminal_columns 80 # Terminal text width in symbols. Used when tput not exist.
+set_default_variables "numerical list" audio_track_user_choice # User chosen audio tracks list.
+set_default_variables boolean OVERWRITE_FLAG false # Overwrite media files.
+set_default_variables boolean CHECK_FLAG false # Check files for errors.
+set_default_variables boolean NO_VIDEO_FLAG false # Output only audio and subtitles.
+set_default_variables boolean TEST_FLAG false # Dry run. Only print ffmpeg commands.
+set_default_variables boolean SKIP_FLAG false # Skip files that do not need audio/subtitle conversation/removal.
+unset var_type var_name default_value # set_default_variables function variables.
+
 # Set default source and destination.
 source="$DEFAULT_SOURCE"
 destination="$DEFAULT_TV_SHOWS_DESTINATION"
 
-# Handle user parameters.
+# Handle user parameters and overide config file.
 while [ $# -gt 0 ]; do
 	case "$1" in
 		-a|--audio)
@@ -1144,7 +1169,6 @@ while [ $# -gt 0 ]; do
 			# Collect numeric parameters for the -a flag.
 			while [ $# -gt 0 ] && echo "$1" | grep -q '^[0-9]*$'; do
 				if [ -z "$audio_track_user_choice" ]; then
-					AUDIO_FLAG=true
 					audio_track_user_choice=$1
 				else
 					audio_track_user_choice="$audio_track_user_choice $1"
@@ -1157,18 +1181,20 @@ while [ $# -gt 0 ]; do
 			shift
 			;;
 		-d|--debug)
-			shift
+			shift # remove -d and --debug parameters from list.
 			;;
 		-h|--help)
+
 			echo "Usage:"
 			echo "$(basename "$0") [-a index [index ...]] [-c] [-d] [-o] [-s] [-t] [-v] [source] [destination]"
-			echo "  -a, --audio		Specify audio tracks (space-separated list of FFmpeg indexes)."
+			echo "  -a, --audio		Specify audio tracks to keep (space-separated list of FFmpeg indexes)."
 			echo "  -c, --check		Checks file for errors."
 			echo "  -d, --debug		Enables script debugging."
 			echo "  -o, --overwrite	Overwrite all existing destination media files without prompt for each file."
 			echo "  -s, --skip		Skip files that do not need audio/subtitle conversation/removal."
 			echo "  -t, --test		Print only FFmepg commands (dry run)."
 			echo "  -v, --video		Excludes video. Output only audio and subtitles."
+			echo "  --verbose		Print additional config errors"
 			echo "  If no source or destination are provided then defaults are used."
 			echo "  Default source is: $DEFAULT_SOURCE"
 			echo "  Default destination for movies is: $DEFAULT_MOVIE_DESTINATION"
@@ -1209,6 +1235,10 @@ while [ $# -gt 0 ]; do
 			NO_VIDEO_FLAG=true
 			shift
 			;;
+		--verbose)
+			VERBOSE_FLAG=true
+			shift
+			;;
 		*)
 			if [ $# -eq 1 ]; then
 				# One parameter provided, use it as the source.
@@ -1237,17 +1267,6 @@ unset language script_argument argument_number language
 # Confirm if the last character of $input_destination is '/'.
 input_destination=$(confirm_last_character "$destination" "/")
 
-# Fallback global variables declaration.
-set_default_variables integer terminal_columns 80 # Terminal text width in symbols. Used when tput not exist.
-set_default_variables "numerical list" audio_track_user_choice # User chosen audio tracks list.
-set_default_variables boolean OVERWRITE_FLAG false # Overwrite media files.
-set_default_variables boolean CHECK_FLAG false # Check files for errors.
-set_default_variables boolean NO_VIDEO_FLAG false # Output only audio and subtitles.
-set_default_variables boolean TEST_FLAG false # Dry run conversation.
-set_default_variables boolean AUDIO_FLAG false # Select only preferred audio tracks.
-set_default_variables boolean SKIP_FLAG false # Skip files that do not need audio/subtitle conversation/removal.
-unset var_type var_name default_value print_config_error
-
 # Check more file extensions than convert.
 if $CHECK_FLAG; then
 #	echo "Run ffmpeg -formats and extract the formats. Please wait..."
@@ -1255,6 +1274,13 @@ if $CHECK_FLAG; then
 #	EXTENSIONS=$(ffmpeg -demuxers -hide_banner | tail -n +5 | cut -d' ' -f4 | xargs -i{} ffmpeg -hide_banner -h demuxer={} | grep 'Common extensions' | cut -d' ' -f7 | tr ',' $'\n' | tr -d '.'))
 #	# Because very slow extract formats it is faster use baked variable.
 	EXTENSIONS=".mkv .avi .mp4 .mka .aac .ac3 .mov .mp2 .mp3 .ogg .vc1 .dss .dts .eac3 .flac .flv .hevc .m2a .m4a .m4v .mks .3g2 .3gp .aa3"
+fi
+
+# audio_track_user_choice is set by script argument or config file.
+if [ -n "$audio_track_user_choice" ]; then
+	AUDIO_FLAG=true
+else
+	AUDIO_FLAG=false
 fi
 
 # Check if user given source is file or directory.

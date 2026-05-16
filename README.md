@@ -28,7 +28,7 @@ Shell script for batch processing media files
 **File Organization:**
 - Handles both single files and directories (recursively)
 - Automatically organizes files into TV shows or movie folders based on detected patterns
-- Loads settings from optional arpas.cfg configuration file
+- Loads settings from optional _arpas.cfg configuration file
 ## Requirements
 
 - [ffmpeg](https://ffmpeg.org/)
@@ -52,7 +52,7 @@ If you provide a directory, all media files in that directory will be processed.
 
 ## Customization
 
-You can edit `arpas.cfg` to adjust which codecs or languages to keep. The script is annotated for easy modification.
+You can edit `_arpas.cfg` to adjust which codecs or languages to keep. The script is annotated for easy modification.
 
 ### Options
 
@@ -63,6 +63,7 @@ You can edit `arpas.cfg` to adjust which codecs or languages to keep. The script
 - -s, --skip          Skip files that do not need audio/subtitle conversation/removal
 - -t, --test          Print only FFmpeg commands (dry run)
 - -v, --video         Excludes video (output only audio and subtitles)
+- --verbose           Print additional config errors
 - -h, --help          Show usage instructions
 
 ### Examples
@@ -94,4 +95,4 @@ You can edit `arpas.cfg` to adjust which codecs or languages to keep. The script
 
 ## License
 
-This project is licensed under the GNU General Public License v2.0. See the LICENSE file for details.
+This project is licensed under the GNU General Public License v2.0.
