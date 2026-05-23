@@ -4,11 +4,12 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-05-13]															#
-# Version: [1.8.1]																#
-# Add: 		--verbose script parameter for set_default_variables function.		#
-# Fix: 		set_default_variable AUDIO_FLAG.									#
-# Change:	config file name to _arpas.cfg										#
+# Date: [2026-05-23]															#
+# Version: [1.8.3]																#
+# Fix:	transfer audio and subtitle titles from destination file, 				#
+#		professional audio selection, nfo file deletion,						#
+#		file size diference output. 											#
+# Add:	Print script usage when no source given.								#
 #################################################################################
 
 # Loop through all command-line arguments to check for "-d" or "--debug"
@@ -324,6 +325,7 @@ convert_file(){
 				profesional_audio_tracks="$(echo "$file_streams" | jq -r --arg lang "$language" '.[] | select(.codec_type == "audio" and .title != null and .language == $lang) | select(.title | test("prof|Проф"; "i")) | .index')"
 				if [ -n "$profesional_audio_tracks" ]; then
 					selected_audio_tracks="$profesional_audio_tracks"
+					selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c '[^[:space:]]')
 				fi
 				unset profesional_audio_tracks
 			fi
@@ -348,6 +350,7 @@ convert_file(){
 			done
 			unset selected_audio_track
 
+			# Output existing destination file information.
 			echo
 			echo "⚠️ Found $selected_audio_tracks_count audio tracks of $audio_language language"
 			json_query_command='(["ID:","LANGUAGE:","TITLE:"]), (.['"$json_query_command"'] | [.index, .language, .title]) | @tsv'
@@ -417,7 +420,7 @@ convert_file(){
 		destination_audio_titles="$(echo "$destination_file_streams" | jq -r --arg lang "$audio_language" '.[] | select(.codec_type == "audio" and .language == $lang and .title != null) | .title')"
 		destination_audio_titles_count=$(echo "$destination_audio_titles" | grep -c '[^[:space:]]')
 		if [ -z "$source_audio_title" ] && [ "$destination_audio_titles_count" -eq 1 ]; then
-			printf 'Source audio track %s, lang:%s does not have title. Overwrite it from destination file with "%s"? [y/N] ' "$selected_audio_tracks" "$audio_language" "$destination_audio_titles"
+			printf 'Source audio track %s does not have title. Overwrite it with "%s"? [y/N] ' "$selected_audio_tracks" "$destination_audio_titles"
 			read -r transfer_audio_title_user_choice
 			case "$transfer_audio_title_user_choice" in
 				y|Y)
@@ -493,9 +496,7 @@ convert_file(){
 						subtitle_tracks="$subrip_subtitle_tracks"
 					fi
 				fi
-				unset profesional_subtitle_tracks subtitle_tracks_count subrip_subtitle_tracks subrip_subtitle_tracks
 			fi
-			
 			break
 		fi
 
@@ -504,6 +505,7 @@ convert_file(){
 			break
 		fi
 	done
+	unset profesional_subtitle_tracks subrip_subtitle_tracks
 
 	# Import subtitle track title from existing file.
 	if [ -f "$destination" ] && [ -n "$destination_file_streams" ] && [ "$subtitle_tracks_count" -eq "1" ]; then
@@ -512,7 +514,7 @@ convert_file(){
 		destination_subtitle_titles_count=$(echo "$destination_subtitle_titles" | grep -c '[^[:space:]]')
 		source_subtitle_title="$(echo "$file_streams" | jq -r --arg lang "$subtitle_language" '.[] | select(.codec_type == "subtitle" and .language == $lang and .title != null) | .title')"
 		if [ -z "$source_subtitle_title" ] && [ "$destination_subtitle_titles_count" -eq 1 ]; then
-			printf 'Source subtitle track %s, lang:%s does not have title. Overwrite it from destination file with "%s"? [y/N] ' "$subtitle_tracks" "$subtitle_language" "$destination_subtitle_titles"
+			printf 'Source subtitle track %s does not have title. Overwrite it with "%s"? [y/N] ' "$subtitle_tracks" "$destination_subtitle_titles"
 			read -r transfer_subtitle_title_user_choice
 			case "$transfer_subtitle_title_user_choice" in
 				y|Y)
@@ -528,7 +530,7 @@ convert_file(){
 			unset transfer_subtitle_title_user_choice
 		fi
 	fi
-	unset source_subtitle_title destination_subtitle_titles destination_subtitle_titles_count 
+	unset source_subtitle_title destination_subtitle_titles subtitle_tracks_count destination_subtitle_titles_count
 
 	# Select commentary subtitles.
 	commentary_subtitle=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "subtitle" and .title != null) | select(.title | contains("Commentary"))')
@@ -556,18 +558,18 @@ convert_file(){
 	fi
 	unset audio_language subtitle_language
 
-	# Do not output video.
+	# Create FFmpeg command.
 	if $NO_VIDEO_FLAG; then
+		# Do not output video.
 		ffmpeg_command="-vn"
-		# Add video and remove title.
 	elif [ -n "$video_codecs" ]; then
+		# Add video and remove title.
 		selected_video_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "video" and .codec_name != "mjpeg" and .codec_name != "jpeg" and .codec_name != "png") | .index')"
 		destination_video_track_index=0
 		for selected_video_track in $selected_video_tracks; do
 			ffmpeg_command="-map 0:V:$selected_video_track -c:V:$destination_video_track_index copy -metadata:s:v:$destination_video_track_index title=\"\""
 			destination_video_track_index=$(( destination_video_track_index + 1 ))
 		done
-		ffmpeg_command="$ffmpeg_command -metadata title=\"\""
 		unset destination_video_track_index selected_video_track
 	fi
 
@@ -579,7 +581,7 @@ convert_file(){
 	# Add audio tracks.
 	destination_audio_track_index=0
 	# Count how much audio and subtitles tracks will be copied without conversation.
-	not_changed_tracks=0
+	changed_tracks=0 # changed audio codec or added title to audio/subtitle.
 	for audio_track in $selected_audio_tracks; do
 		audio_codec="$(echo "$file_streams" | jq -r --arg audio_track "$audio_track" '.[$audio_track|tonumber].codec_name')"
 
@@ -597,24 +599,23 @@ convert_file(){
 		if $video_codec_supported || [ -z "$video_codecs" ] || $NO_VIDEO_FLAG; then
 			if $audio_codec_supported; then
 				ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
-				not_changed_tracks=$(( not_changed_tracks + 1 ))
 			else
 				ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index $CONVERT_AUDIO_CODEC"
 				# Change codec name for destination screen output.
 				file_streams=$(echo "$file_streams" | jq --arg index "$audio_track" --arg codec_name "$CONVERT_AUDIO_CODEC" '.[] |= if .index == ($index | tonumber) then .codec_name = $codec_name else . end')
+				changed_tracks=$(( changed_tracks + 1 ))
 			fi
 		else
 			ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
-			not_changed_tracks=$(( not_changed_tracks + 1 ))
 		fi
-
-		destination_audio_track_index=$(( destination_audio_track_index + 1 ))
 
 		# Change audio title from existing destination file.
 		if [ -n "$source_audio_index" ] && [ "$source_audio_index" -eq "$audio_track" ] && [ -n "$destination_audio_title" ]; then
-			ffmpeg_command="$ffmpeg_command -metadata:s:a=$destination_audio_track_index title=\"$destination_audio_title\""
-			not_changed_tracks=$(( not_changed_tracks - 1 ))
+			ffmpeg_command="$ffmpeg_command -metadata:s:a:$destination_audio_track_index title=\"$destination_audio_title\""
+			changed_tracks=$(( changed_tracks + 1 ))
 		fi
+
+		destination_audio_track_index=$(( destination_audio_track_index + 1 ))
 	done
 	unset audio_track audio_codec destination_audio_track_index video_codecs video_codec_supported source_audio_index destination_audio_title
 
@@ -624,23 +625,19 @@ convert_file(){
 		for subtitle_track in $subtitle_tracks; do
 			# Do not convert subtitles.
 			ffmpeg_command="$ffmpeg_command -map 0:$subtitle_track -c:s copy"
-			not_changed_tracks=$(( not_changed_tracks + 1 ))
 
 			# Change subtitle title from existing destination file.
 			if [ -n "$source_subtitle_index" ] && [ "$source_subtitle_index" -eq "$subtitle_track" ] && [ -n "$destination_subtitles_title" ]; then
-				ffmpeg_command="$ffmpeg_command -metadata:s:s=$destination_subtitle_track_index title=\"$destination_subtitle_title\""
-				not_changed_tracks=$(( not_changed_tracks - 1 ))
+				ffmpeg_command="$ffmpeg_command -metadata:s:s:$destination_subtitle_track_index title=\"$destination_subtitle_title\""
+				changed_tracks=$(( changed_tracks + 1 ))
 			fi
 			destination_subtitle_track_index=$(( destination_subtitle_track_index + 1 ))
 		done
 		unset subtitle_track destination_subtitle_track_index destination_subtitles_title
 	fi
 
-	# Count source audio and subtitles tracks.
-	audio_and_subtitle_count=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" or .codec_type == "subtitle") | .index' | grep -c '[^[:space:]]')
-
 	# Check need of conversation audio or strip some tracks.
-	if [ "$not_changed_tracks" -eq "$audio_and_subtitle_count" ]; then
+	if [ "$changed_tracks" -eq 0 ]; then
 		#	Convert files even no changes will be made to file exept renaming and copying to destination.
 		if ! $SKIP_FLAG || $NO_VIDEO_FLAG; then
 			# Copy the file with ffmpeg.
@@ -653,13 +650,13 @@ convert_file(){
 			fi
 		else
 			error "Skipping (${1#"$source_directory"}) because do not need to convert this file."
-			unset ffmpeg_command audio_and_subtitle_count selected_video_tracks selected_audio_tracks subtitle_tracks file_streams
+			unset ffmpeg_command selected_video_tracks selected_audio_tracks subtitle_tracks file_streams
 			return 1
 		fi
 	fi
 
 	selected_destination_tracks="$selected_video_tracks $selected_audio_tracks $subtitle_tracks"
-	unset selected_video_tracks selected_audio_tracks subtitle_tracks audio_and_subtitle_count
+	unset selected_video_tracks selected_audio_tracks subtitle_tracks
 
 	# Construct the destination file output jq command.
 	for selected_destination_track in $selected_destination_tracks; do
@@ -789,7 +786,9 @@ convert_file(){
 						"$source_nfo_file" > "$destination_nfo_file"; then
 							echo "Clean $destination_nfo_file"
 							echo "rm $source_nfo_file"
-							rm "$source_nfo_file"
+							if [ -f "$destination_nfo_file" ]; then
+								rm "$source_nfo_file"
+							fi
 						else
 							error "Failed clean $source_nfo_file"
 						fi
@@ -803,7 +802,12 @@ convert_file(){
 						# | `-d '//source[text()="UNKNOWN"]'` | Remove `<source>` elements with value `UNKNOWN`. |
 
 					else
-						error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
+						# Print error only one time.
+						# Assume that shell is set that all variables exist and return true.
+						if ! $XMLSTARLET_EXIST_FLAG; then
+							error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
+						fi
+						XMLSTARLET_EXIST_FLAG=false
 					fi
 				fi
 			done
@@ -963,7 +967,6 @@ convert_file(){
 
 	# Update the total saved bytes.
 	total_size_difference=$((total_size_difference + size_difference))
-	unset size_difference
 }
 
 # Function to check a file for errors.
@@ -1138,9 +1141,9 @@ done
 unset script_argument
 
 # Fallback constants declaration:
-set_default_variables "constant string" DEFAULT_SOURCE "/path/folder/" # or /path/folder/file.ext, used when not given with script parameters.
-set_default_variables "constant string" DEFAULT_MOVIE_DESTINATION "/path/to/movie/folder/" # Default destination for movie. Can be directory. Used when not given with script parameters.
-set_default_variables "constant string" DEFAULT_TV_SHOWS_DESTINATION "/path/to/TV show/folder/" # Default TV series directory. Used when not given with script parameters.
+#set_default_variables "constant string" DEFAULT_SOURCE "/path/folder/" # or /path/folder/file.ext, used when not given with script parameters.
+#set_default_variables "constant string" DEFAULT_MOVIE_DESTINATION "/path/to/movie/folder/" # Default destination for movie. Can be directory. Used when not given with script parameters.
+#set_default_variables "constant string" DEFAULT_TV_SHOWS_DESTINATION "/path/to/TV show/folder/" # Default TV series directory. Used when not given with script parameters.
 set_default_variables "constant string" LANGUAGES "lit eng rus" # Preferred and fallback languages. Script chooses language from left to right.
 set_default_variables "constant string" CONVERT_AUDIO_CODEC libvorbis # Audio codec to convert unsupported codecs.
 set_default_variables "variable string" EXTENSIONS ".mkv .avi .mka .mp4 .m2ts .ts" # Script supported file extensions.
@@ -1149,7 +1152,7 @@ set_default_variables "constant string" SUPPORTED_AUDIO_CODECS "vorbis aac mp3 o
 
 # Fallback global variables declaration.
 set_default_variables integer terminal_columns 80 # Terminal text width in symbols. Used when tput not exist.
-set_default_variables "numerical list" audio_track_user_choice # User chosen audio tracks list.
+#set_default_variables "numerical list" "" # User chosen audio tracks list.
 set_default_variables boolean OVERWRITE_FLAG false # Overwrite media files.
 set_default_variables boolean CHECK_FLAG false # Check files for errors.
 set_default_variables boolean NO_VIDEO_FLAG false # Output only audio and subtitles.
@@ -1184,7 +1187,6 @@ while [ $# -gt 0 ]; do
 			shift # remove -d and --debug parameters from list.
 			;;
 		-h|--help)
-
 			echo "Usage:"
 			echo "$(basename "$0") [-a index [index ...]] [-c] [-d] [-o] [-s] [-t] [-v] [source] [destination]"
 			echo "  -a, --audio		Specify audio tracks to keep (space-separated list of FFmpeg indexes)."
@@ -1297,7 +1299,12 @@ elif [ -d "$source" ]; then
 	user_source_directory="$source"
 	process_directory "$source"
 else
-	printf '\e[38;5;196m⚠️ "%s" does not exist or is not a media file. Use media files with these %s extensions or directory with media files.\e[0m\n' "$source" "$EXTENSIONS"
+	if [ -n "$source" ]; then
+		printf '\e[38;5;196m⚠️ "%s" does not exist or is not a media file. Use media files with these %s extensions or directory with media files.\e[0m\n' "$source" "$EXTENSIONS"
+	else
+		# Print script usage.
+		exec "$0" --help
+	fi
 	exit 1
 fi
 
