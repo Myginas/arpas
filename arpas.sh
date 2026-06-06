@@ -4,12 +4,9 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-05-23]															#
-# Version: [1.8.3]																#
-# Fix:	transfer audio and subtitle titles from destination file, 				#
-#		professional audio selection, nfo file deletion,						#
-#		file size diference output. 											#
-# Add:	Print script usage when no source given.								#
+# Date: [2026-05-30]															#
+# Version: [1.8.4]																#
+# Fix:	Do not add fall back commentary audio tracks.							#
 #################################################################################
 
 # Loop through all command-line arguments to check for "-d" or "--debug"
@@ -25,8 +22,8 @@ unset script_argument
 # Enable debugging.
 if $DEBUG; then
 	unset DEBUG
-	if command -v shellcheck > /dev/null 2>&1; then
-		shellcheck "$0"
+	if command -v shellcheck > /dev/null 2>&1
+	then shellcheck "$0"
 	fi
 	PS4='${LINENO}:'
 	set -x
@@ -51,32 +48,32 @@ set_default_variables() {
 	case "$var_type" in
 		"constant string")
 			if eval "[ -z \"\${$var_name}\" ]"; then
-				if $VERBOSE_FLAG && ! $HELP_FLAG ; then
-					printf '%s is not set, setting to default value: %s\n' "$var_name" "$default_value"
+				if $VERBOSE_FLAG && ! $HELP_FLAG
+				then printf '%s is not set, setting to default value: %s\n' "$var_name" "$default_value"
 				fi
 				eval readonly "$var_name='$default_value'"
 			fi
 			;;
 		"variable string")
 			if eval "[ -z \"\${$var_name}\" ]"; then
-				if $VERBOSE_FLAG && ! $HELP_FLAG; then
-					printf '%s is not set, setting to default value: %s\n' "$var_name" "$default_value"
+				if $VERBOSE_FLAG && ! $HELP_FLAG
+				then printf '%s is not set, setting to default value: %s\n' "$var_name" "$default_value"
 				fi
 				eval "$var_name='$default_value'"
 			fi
 			;;
 		integer)
 			if ! eval "printf '%s\n' \"\$$var_name\"" | grep -qE '^[0-9]+$'; then
-				if $VERBOSE_FLAG && ! $HELP_FLAG; then
-					printf '%s is not an number, setting to default value: %s\n' "$var_name" "$default_value"
+				if $VERBOSE_FLAG && ! $HELP_FLAG
+				then printf '%s is not an number, setting to default value: %s\n' "$var_name" "$default_value"
 				fi
 				eval "$var_name='$default_value'"
 			fi
 			;;
 		boolean)
 			if ! eval "printf '%s\n' \"\$$var_name\"" | grep -qE '^(true|false)$'; then
-				if $VERBOSE_FLAG && ! $HELP_FLAG; then
-					printf '%s is not a boolean (true/false), setting to default value: %s\n' "$var_name" "$default_value"
+				if $VERBOSE_FLAG && ! $HELP_FLAG
+				then printf '%s is not a boolean (true/false), setting to default value: %s\n' "$var_name" "$default_value"
 				fi
 				eval "$var_name='$default_value'"
 			fi
@@ -84,8 +81,8 @@ set_default_variables() {
 		"numerical list")
 			if eval "[ -n \"\${$var_name}\" ]"; then
 				if ! eval "printf '%s\n' \"\$$var_name\"" | grep -qE '^[0-9]+([, ]+[0-9]+)*$'; then
-					if $VERBOSE_FLAG && ! $HELP_FLAG; then
-						printf '%s does not contain a valid numerical list (numbers separated by commas or spaces), seting it to empty.\n' "$var_name"
+					if $VERBOSE_FLAG && ! $HELP_FLAG
+					then printf '%s does not contain a valid numerical list (numbers separated by commas or spaces), seting it to empty.\n' "$var_name"
 					fi
 					eval "$var_name=\"\""
 				fi
@@ -98,18 +95,17 @@ set_default_variables() {
 error() {
 	errors="$errors$1\n"
 	# Print when second parameter not given.
-	if [ -z "$2" ]; then
-		printf '\e[38;5;196m⚠️ %b\e[0m\n' "$1"
+	if [ -z "$2" ]
+	then printf '\e[38;5;196m⚠️ %b\e[0m\n' "$1"
 	fi
 }
 
 # Function to ensure last character of string.
 confirm_last_character() {
 	last_character=$(printf '%s' "$1" | tail -c 1)
-	if [ "$last_character" != "$2" ]; then
-		echo "$1$2"
-	else
-		echo "$1"
+	if [ "$last_character" != "$2" ]
+	then echo "$1$2"
+	else echo "$1"
 	fi
 	unset last_character
 }
@@ -129,10 +125,9 @@ human_readable_size(){
 
 	# if the unit is still "B" at this point, it means we've already converted the size to bytes.
 	# In that case, just print the size with a single space before the unit.
-	if [ "$UNIT" = "B" ]; then
-		printf '%4.0f %s\n' "$SIZE" "$UNIT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
-	else
-		printf '%7.02f %s\n' "$SIZE" "$UNIT "| sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+	if [ "$UNIT" = "B" ]
+	then printf '%4.0f %s\n' "$SIZE" "$UNIT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+	else printf '%7.02f %s\n' "$SIZE" "$UNIT "| sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 	fi
 	unset SIZE UNIT UNITS
 }
@@ -183,10 +178,9 @@ convert_file(){
 
 	# Make destination path from destination path and source file name.
 	source_extension=$(echo "$source" | awk -F. '{print $NF}')
-	if $video_codec_supported && [ "$source_extension" != "mka" ]; then
-		destination_extension="mkv"
-	else
-		destination_extension="$source_extension"
+	if $video_codec_supported && [ "$source_extension" != "mka" ]
+	then destination_extension="mkv"
+	else destination_extension="$source_extension"
 	fi
 
 	source_file_name=$(basename "$source")
@@ -221,8 +215,8 @@ convert_file(){
 		unset pattern season episode
 
 		# Add subfolder for TV series if destination folder not same as source folder.
-		if [ "$destination_folder" != "$source_folder" ]; then
-			destination_directory="$destination_directory$source_folder/"
+		if [ "$destination_folder" != "$source_folder" ]
+		then destination_directory="$destination_directory$source_folder/"
 		fi
 
 		# Check if $renamed_file_name starts with the series pattern.
@@ -238,19 +232,19 @@ convert_file(){
 	else
 		# If no TV series pattern found, keep the original string and search movie pattern.
 		# If destination starts with DEFAULT_TV_SHOWS_DESTINATION change it to DEFAULT_MOVIE_DESTINATION.
-		if echo "$destination_directory" | grep -q "^$DEFAULT_TV_SHOWS_DESTINATION"; then
-			destination_directory=$(echo "$destination_directory" | sed "s|$DEFAULT_TV_SHOWS_DESTINATION|$DEFAULT_MOVIE_DESTINATION|g")
+		if echo "$destination_directory" | grep -q "^$DEFAULT_TV_SHOWS_DESTINATION"
+		then destination_directory=$(echo "$destination_directory" | sed "s|$DEFAULT_TV_SHOWS_DESTINATION|$DEFAULT_MOVIE_DESTINATION|g")
 		fi
 
 		# Assumption that script not run in year change time.
-		if [ -z "$current_year" ];then
-			current_year=$(date +%Y)
+		if [ -z "$current_year" ]
+		then current_year=$(date +%Y)
 		fi
 		# Extract all four-digit numbers from the renamed_file_name and filter out the between 1902 and current_year.
 		for year in $(echo "$renamed_file_name" | grep -oE '[0-9]{4}'); do
 			# First movie was released 1902.
-			if [ "$year" -ge 1902 ] && [ "$year" -le "$current_year" ]; then
-				valid_year=$year
+			if [ "$year" -ge 1902 ] && [ "$year" -le "$current_year" ]
+			then valid_year=$year
 			fi
 		done
 		unset year
@@ -259,11 +253,11 @@ convert_file(){
 		if [ -n "$valid_year" ]; then
 			# Truncate the file name after the last occurrence of the year.
 			# If the filename contains the year surrounded by double parentheses (e.g., "file((2023))").
-			if echo "$renamed_file_name" | grep -q "(($valid_year))"; then
-				destination="${renamed_file_name%%(*}"
+			if echo "$renamed_file_name" | grep -q "(($valid_year))"
+				then destination="${renamed_file_name%%(*}"
 			# If the filename contains the year surrounded by parentheses (e.g., "file(2023)").
-			elif echo "$renamed_file_name" | grep -q "($valid_year)"; then
-				destination="${renamed_file_name%%"($valid_year)"*}"
+			elif echo "$renamed_file_name" | grep -q "($valid_year)"
+				then destination="${renamed_file_name%%"($valid_year)"*}"
 			else # If the filename contains the year without surrounding parentheses (e.g., "file2023").
 				destination="${renamed_file_name%"$valid_year"*}"
 			fi
@@ -283,8 +277,8 @@ convert_file(){
 		if [ -f "${source%.*}.nfo" ] || [ -f "$source_directory""movie.nfo" ] || [ "$source_folder" = "$source_file_name" ];then
 			# Add folder if destination not same as source file name and destination.
 			if [ "$source_file_name" != "$destination_folder" ]; then
-				if [ "$destination_folder" != "$destination" ]; then
-					destination_directory="$destination_directory$destination/"
+				if [ "$destination_folder" != "$destination" ]
+				then destination_directory="$destination_directory$destination/"
 				fi
 			else
 				# Replace destination_folder with destination.
@@ -302,10 +296,10 @@ convert_file(){
 	# Audio file save as .mka in source directory.
 	if $NO_VIDEO_FLAG; then
 		destination_extension="mka"
-		if echo "$destination_directory" | grep -q "^$DEFAULT_TV_SHOWS_DESTINATION"; then
-			destination="${source%.*}.$destination_extension"
-		elif echo "$destination_directory" | grep -q "^$DEFAULT_MOVIE_DESTINATION"; then
-			destination="${source%.*}.$destination_extension"
+		if echo "$destination_directory" | grep -q "^$DEFAULT_TV_SHOWS_DESTINATION"
+			then destination="${source%.*}.$destination_extension"
+		elif echo "$destination_directory" | grep -q "^$DEFAULT_MOVIE_DESTINATION"
+			then destination="${source%.*}.$destination_extension"
 		fi
 	fi
 
@@ -342,10 +336,9 @@ convert_file(){
 			# Construct the jq command dynamically.
 			for selected_audio_track in $selected_audio_tracks; do
 			# Append audio index element to jq command.
-				if [ -z "$json_query_command" ]; then
-					json_query_command="$selected_audio_track"
-				else
-					json_query_command="$json_query_command,$selected_audio_track"
+				if [ -z "$json_query_command" ]
+				then json_query_command="$selected_audio_track"
+				else json_query_command="$json_query_command,$selected_audio_track"
 				fi
 			done
 			unset selected_audio_track
@@ -370,10 +363,9 @@ convert_file(){
 			if echo "$user_audio_track" | grep -q '^[0-9]'; then
 				for selected_audio_track in $selected_audio_tracks; do
 					if [ "$user_audio_track" -eq "$selected_audio_track" ]; then
-						if [ -n "$user_selected_audio_tracks" ];then
-							user_selected_audio_tracks="$user_selected_audio_tracks $user_audio_track"
-						else
-							user_selected_audio_tracks="$user_audio_track"
+						if [ -n "$user_selected_audio_tracks" ]
+						then user_selected_audio_tracks="$user_selected_audio_tracks $user_audio_track"
+						else user_selected_audio_tracks="$user_audio_track"
 						fi
 						break
 					fi
@@ -389,16 +381,15 @@ convert_file(){
 		fi
 
 		# Reset audio track choice if not set as script argument.
-		if ! $AUDIO_FLAG; then
-			unset audio_track_user_choice
+		if ! $AUDIO_FLAG
+		then unset audio_track_user_choice
 		fi
 	fi
 
 	# Count selected audio track before adding commentary audio.
-	if [ -n "$selected_audio_tracks" ]; then
-		selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c '[^[:space:]]')
-	else
-		selected_audio_tracks_count=0
+	if [ -n "$selected_audio_tracks" ]
+	then selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c '[^[:space:]]')
+	else selected_audio_tracks_count=0
 	fi
 
 	# Output existing destination file information.
@@ -443,28 +434,25 @@ convert_file(){
 		# Select all audio tracks if not found preferred languages.
 		selected_audio_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio") | .index')"
 	else
-		# Add commentary audio.
+		# Or add commentary audio.
 		commentary_audio="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" and .title != null) | select(.title | test("Commentary"; "i"))')"
 		if [ -n "$commentary_audio" ]; then
 			# Select commentary audio by languages.
 			for language in $LANGUAGES; do
-				# # Do not include selected language and fall back languages.
-				# if [ "$audio_language" = "$language" ]; then
-				# 	break
-				# fi
-
+				if [ "$language" = "$audio_language" ]
+				then continue # Do not include same commentary language as audio language.
+				fi
 				commentary_audio_track=$(echo "$commentary_audio" | jq -r --arg lang "$language" '. | select(.language == $lang) | .index')
 				if [ -n "$commentary_audio_track" ]; then
-					if [ -n "$selected_audio_tracks" ];then
-						selected_audio_tracks="$selected_audio_tracks $commentary_audio_track"
-					else
-						selected_audio_tracks="$commentary_audio_track"
+					if [ -n "$selected_audio_tracks" ]
+					then selected_audio_tracks="$selected_audio_tracks $commentary_audio_track"
+					else selected_audio_tracks="$commentary_audio_track"
 					fi
-					break
+					break # Do not add fall back languages.
 				fi
 			done
-			unset commentary_audio commentary_audio_track
 		fi
+		unset commentary_audio commentary_audio_track
 	fi
 
 	# Select subtitles.
@@ -492,17 +480,17 @@ convert_file(){
 				else
 					# Prefer select subrip over hdmv_pgs_subtitle for not professional subtitles.
 					subrip_subtitle_tracks=$(echo "$file_streams" | jq -r --arg lang "$language" '.[] | select(.codec_type == "subtitle" and .language == $lang and .codec_name == "subrip") | .index')
-					if [ -n "$subrip_subtitle_tracks" ]; then
-						subtitle_tracks="$subrip_subtitle_tracks"
+					if [ -n "$subrip_subtitle_tracks" ]
+					then subtitle_tracks="$subrip_subtitle_tracks"
 					fi
 				fi
 			fi
-			break
+			break # Do not include fallback languages.
 		fi
 
 		# Do not include fall back languages.
-		if [ "$audio_language" = "$language" ]; then
-			break
+		if [ "$audio_language" = "$language" ]
+		then break
 		fi
 	done
 	unset profesional_subtitle_tracks subrip_subtitle_tracks
@@ -540,10 +528,9 @@ convert_file(){
 			if [ "$language" != "$subtitle_language" ];then
 				commentary_subtitle_tracks=$(echo "$commentary_subtitle" | jq -r --arg lang "$language" '. | select(.language == $lang) | .index')
 				if [ -n "$commentary_subtitle_tracks" ]; then
-					if [ -n "$subtitle_tracks" ]; then
-						subtitle_tracks="$subtitle_tracks $commentary_subtitle_tracks"
-					else
-						subtitle_tracks="$commentary_subtitle_tracks"
+					if [ -n "$subtitle_tracks" ];
+					then subtitle_tracks="$subtitle_tracks $commentary_subtitle_tracks"
+					else subtitle_tracks="$commentary_subtitle_tracks"
 					fi
 					break
 				fi
@@ -553,8 +540,8 @@ convert_file(){
 	fi
 
 	# If not found preferred audio and subtitles languages then take all subtitles.
-	if [ -z "$audio_language" ] && [ -z "$subtitle_language" ]; then
-		subtitle_tracks=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "subtitle") | .index')
+	if [ -z "$audio_language" ] && [ -z "$subtitle_language" ]
+	then subtitle_tracks=$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "subtitle") | .index')
 	fi
 	unset audio_language subtitle_language
 
@@ -574,8 +561,8 @@ convert_file(){
 	fi
 
 	# Map audio tracks.
-	for audio_track in $selected_audio_tracks; do
-		ffmpeg_command="$ffmpeg_command -map 0:$audio_track"
+	for audio_track in $selected_audio_tracks
+	do ffmpeg_command="$ffmpeg_command -map 0:$audio_track"
 	done
 
 	# Add audio tracks.
@@ -597,16 +584,15 @@ convert_file(){
 
 		# Decide convert or copy audio track.
 		if $video_codec_supported || [ -z "$video_codecs" ] || $NO_VIDEO_FLAG; then
-			if $audio_codec_supported; then
-				ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
+			if $audio_codec_supported
+			then ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
 			else
 				ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index $CONVERT_AUDIO_CODEC"
 				# Change codec name for destination screen output.
 				file_streams=$(echo "$file_streams" | jq --arg index "$audio_track" --arg codec_name "$CONVERT_AUDIO_CODEC" '.[] |= if .index == ($index | tonumber) then .codec_name = $codec_name else . end')
 				changed_tracks=$(( changed_tracks + 1 ))
 			fi
-		else
-			ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
+		else ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
 		fi
 
 		# Change audio title from existing destination file.
@@ -661,10 +647,9 @@ convert_file(){
 	# Construct the destination file output jq command.
 	for selected_destination_track in $selected_destination_tracks; do
 	# Append selected indexes to jq command.
-		if [ -n "$json_query_command" ]; then
-			json_query_command="$json_query_command,$selected_destination_track"
-		else 
-			json_query_command="$selected_destination_track"
+		if [ -n "$json_query_command" ]
+		then json_query_command="$json_query_command,$selected_destination_track"
+		else json_query_command="$selected_destination_track"
 		fi
 	done
 	unset selected_destination_track selected_destination_tracks
@@ -735,10 +720,9 @@ convert_file(){
 			# Record the FFmpeg end time.
 			ffmpeg_end_time=$(date +%s)
 			ffmpeg_run_time=$((ffmpeg_end_time - ffmpeg_start_time))
-			if $allow_run_ffmpeg;then
-				error "$ffmpeg_command"
-			else
-				error "$ffmpeg_command" "do not print"
+			if $allow_run_ffmpeg
+			then error "$ffmpeg_command"
+			else error "$ffmpeg_command" "do not print"
 			fi
 			unset ffmpeg_command allow_run_ffmpeg
 			return 1
@@ -786,8 +770,8 @@ convert_file(){
 						"$source_nfo_file" > "$destination_nfo_file"; then
 							echo "Clean $destination_nfo_file"
 							echo "rm $source_nfo_file"
-							if [ -f "$destination_nfo_file" ]; then
-								rm "$source_nfo_file"
+							if [ -f "$destination_nfo_file" ]
+							then rm "$source_nfo_file"
 							fi
 						else
 							error "Failed clean $source_nfo_file"
@@ -804,8 +788,8 @@ convert_file(){
 					else
 						# Print error only one time.
 						# Assume that shell is set that all variables exist and return true.
-						if ! $XMLSTARLET_EXIST_FLAG; then
-							error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
+						if ! $XMLSTARLET_EXIST_FLAG
+						then error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
 						fi
 						XMLSTARLET_EXIST_FLAG=false
 					fi
@@ -874,8 +858,8 @@ convert_file(){
 					kodi_file_destination="$destination_directory"$(basename "$kodi_file")
 					move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
 					echo "$move_file_command"
-					if ! eval "$move_file_command";then
-						error "moving \"$kodi_file\" file."
+					if ! eval "$move_file_command"
+					then error "moving \"$kodi_file\" file."
 					fi
 				done
 				IFS=$SAVE_IFS
@@ -887,10 +871,9 @@ convert_file(){
 				if [ -d "$source_directory$kodi_folder" ]; then
 					move_file_command="rsync -av --remove-source-files \"$source_directory$kodi_folder\" \"$destination_directory$kodi_folder\""
 					echo "$move_file_command"
-					if eval "$move_file_command";then
-						rmdir "$source_directory$kodi_folder"
-					else
-						error "moving \"$source_directory$kodi_folder\" folder."
+					if eval "$move_file_command"
+					then rmdir "$source_directory$kodi_folder"
+					else error "moving \"$source_directory$kodi_folder\" folder."
 					fi
 				fi
 			done
@@ -915,10 +898,9 @@ convert_file(){
 	# Output time in format hours:minutes:seconds how long took function and how long took whole script to finish.
 
 	# Compare source and destination files after conversation.
-	if [ -f "$destination" ]; then
-		destination_size=$(stat "$destination" | grep "Size:" | awk '{print $2}')
-	else
-		destination_size=0
+	if [ -f "$destination" ]
+	then destination_size=$(stat "$destination" | grep "Size:" | awk '{print $2}')
+	else destination_size=0
 	fi
 
 	# Check if the destination file is bigger than the source file.
@@ -933,16 +915,16 @@ convert_file(){
 		error "Destination file (${destination#"$input_destination"}) is less than 10%% of the source file. Deleting it."
 
 		# Delete destination file.
-		if [ -f "$destination" ]; then
-			rm "$destination"
+		if [ -f "$destination" ]
+		then rm "$destination"
 		fi
 		return 1
 	fi
 	unset ten_percent
 
 	# Make destination file modification date same as source.
-	if [ -f "$destination" ]; then
-		touch -r "$source" "$destination"
+	if [ -f "$destination" ]
+	then touch -r "$source" "$destination"
 	else
 		error "Destination file (${destination#"$input_destination"}) does not exist."
 		return 1
@@ -1040,8 +1022,8 @@ process_directory() {
 			for extension in $EXTENSIONS; do
 				if [ "$extension" = "$file_extension" ]; then
 					# Print horizontal file separator line.
-					if [ -n "$job_separator" ]; then
-						echo "$job_separator"
+					if [ -n "$job_separator" ]
+					then echo "$job_separator"
 					else
 						# Generate default lenght job separator.
 						job_separator=$(printf '%*s' "$terminal_columns" " " | tr ' ' '-')
@@ -1071,10 +1053,9 @@ process_directory() {
 						# Check files for errors.
 						check_file "$path"
 					else
-						if [ -n "$folder" ];then
-							destination="$input_destination$folder/"
-						else
-							destination="$input_destination"
+						if [ -n "$folder" ]
+						then destination="$input_destination$folder/"
+						else destination="$input_destination"
 						fi
 						unset folder
 						# Convert file.
@@ -1101,10 +1082,9 @@ for program in ffprobe ffmpeg jq; do
 done
 
 # Check if exist tput program.
-if command -v "tput" > /dev/null 2>&1; then
-	TPUT_EXIST=true
-else
-	TPUT_EXIST=false
+if command -v "tput" > /dev/null 2>&1
+then TPUT_EXIST=true
+else TPUT_EXIST=false
 fi
 
 # Print verbose messages only when not given -h or --help script argument.
@@ -1122,11 +1102,11 @@ VERBOSE_FLAG=false # Print detail messages of constants and variables declaratio
 # Load config variables from file _arpas.cfg
 config_file="$(basename "$0")"
 config_file="./_${config_file%.*}.cfg"
-if [ -f "$config_file" ];then
-	. "$config_file"
+if [ -f "$config_file" ]
+then . "$config_file"
 else
-	if ! $HELP_FLAG ;then
-		printf 'Do not found configuration file %s.\n' "$config_file"
+	if ! $HELP_FLAG 
+	then printf 'Do not found configuration file %s.\n' "$config_file" >&2
 	fi
 fi
 unset config_file
@@ -1171,10 +1151,9 @@ while [ $# -gt 0 ]; do
 			shift
 			# Collect numeric parameters for the -a flag.
 			while [ $# -gt 0 ] && echo "$1" | grep -q '^[0-9]*$'; do
-				if [ -z "$audio_track_user_choice" ]; then
-					audio_track_user_choice=$1
-				else
-					audio_track_user_choice="$audio_track_user_choice $1"
+				if [ -z "$audio_track_user_choice" ]
+				then audio_track_user_choice=$1
+				else audio_track_user_choice="$audio_track_user_choice $1"
 				fi
 				shift
 			done
@@ -1279,10 +1258,9 @@ if $CHECK_FLAG; then
 fi
 
 # audio_track_user_choice is set by script argument or config file.
-if [ -n "$audio_track_user_choice" ]; then
-	AUDIO_FLAG=true
-else
-	AUDIO_FLAG=false
+if [ -n "$audio_track_user_choice" ]
+then AUDIO_FLAG=true
+else AUDIO_FLAG=false
 fi
 
 # Check if user given source is file or directory.
@@ -1299,10 +1277,11 @@ elif [ -d "$source" ]; then
 	user_source_directory="$source"
 	process_directory "$source"
 else
-	if [ -n "$source" ]; then
-		printf '\e[38;5;196m⚠️ "%s" does not exist or is not a media file. Use media files with these %s extensions or directory with media files.\e[0m\n' "$source" "$EXTENSIONS"
+	if [ -n "$source" ]
+	then printf '\e[38;5;196m⚠️ "%s" does not exist or is not a media file. Use media files with these %s extensions or directory with media files.\e[0m\n' "$source" "$EXTENSIONS"
 	else
 		# Print script usage.
+		echo "$(basename "$0") --help"
 		exec "$0" --help
 	fi
 	exit 1
@@ -1314,10 +1293,10 @@ if [ "$processed_files_count" -gt 1 ]; then
 	# Output successful FFmpeg commands.
 	if [ -n "$messages_without_mistakes" ]; then
 		echo "$job_separator"
-		if $CHECK_FLAG; then
-			echo "✅ Successful checks:"
-		elif $TEST_FLAG; then
-			echo "All FFmpeg commands:"
+		if $CHECK_FLAG
+			then echo "✅ Successful checks:"
+		elif $TEST_FLAG
+			then echo "All FFmpeg commands:"
 		else
 			echo "✅ Successful conversations:"
 		fi
@@ -1339,12 +1318,12 @@ if [ "$processed_files_count" -gt 1 ]; then
 	# Format the execution time using date command.
 	script_execution_time=$(date -u -d @"$script_execution_time" +"%T")
 
-	if $TEST_FLAG; then
-		echo "Dry run for $processed_files_count files took $script_execution_time."
-	elif $CHECK_FLAG; then
-		echo "$processed_files_count files check complete in $script_execution_time"
-	elif [ "$total_size_difference" -gt "$size_difference" ]; then
-		echo "Total saved: $(human_readable_size "$total_size_difference") and it took $script_execution_time to do so."
+	if $TEST_FLAG
+		then echo "Dry run for $processed_files_count files took $script_execution_time."
+	elif $CHECK_FLAG
+		then echo "$processed_files_count files check complete in $script_execution_time"
+	elif [ "$total_size_difference" -gt "$size_difference" ]
+		then echo "Total saved: $(human_readable_size "$total_size_difference") and it took $script_execution_time to do so."
 	else
 		echo "Do not saved anything but it took $script_execution_time to do so."
 	fi
