@@ -4,30 +4,25 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-05-30]															#
-# Version: [1.8.4]																#
-# Fix:	Do not add fall back commentary audio tracks.							#
+# Date: [2026-06-24]															#
+# Version: [1.9]																#
+# Add:	ttysize	for job separator lenght.										#
+#		file check automatic hardware acceleration selection cuda>vaapi>no.		#
+# Fix:	empty destination, usage.												#
 #################################################################################
 
-# Loop through all command-line arguments to check for "-d" or "--debug"
-DEBUG=false
+# Enable debugging.
 for script_argument in "$@"; do
 	if [ "$script_argument" = "-d" ] || [ "$script_argument" = "--debug" ]; then
-		DEBUG=true
+		if command -v shellcheck > /dev/null 2>&1
+		then shellcheck "$0"
+		fi
+		PS4='${LINENO}:'
+		unset script_argument
+		set -x
 		break
 	fi
 done
-unset script_argument
-
-# Enable debugging.
-if $DEBUG; then
-	unset DEBUG
-	if command -v shellcheck > /dev/null 2>&1
-	then shellcheck "$0"
-	fi
-	PS4='${LINENO}:'
-	set -x
-fi
 
 # Record script start time.
 script_start_time=$(date +%s)
@@ -137,7 +132,7 @@ convert_file(){
 	source="$1" # Source /path/folder/file.extension 
 
 	destination="$2" # Destination /path/ in future will be /path/folder/file.extension
-	destination_directory="$2" # Destination /path/
+	destination_path="$2" # Destination /path/
 
 	# Extract the parent directory of the source path.
 	source_directory=$(dirname "$source") # /path/folder
@@ -152,7 +147,6 @@ convert_file(){
 
 	# Output source file information.
 	source_size=$(stat "$source" | grep "Size:" | awk '{print $2}')
-	echo
 	echo "Source file: $source $(human_readable_size "$source_size")"
 
 	file_streams=$(echo "$file_streams" | jq -r '[.streams[]|{index: .index, codec_name: .codec_name, codec_type: .codec_type, language: .tags.language, title: .tags.title}]')
@@ -183,27 +177,27 @@ convert_file(){
 	else destination_extension="$source_extension"
 	fi
 
-	source_file_name=$(basename "$source")
-	source_file_name="${source_file_name%.*}" # File name without extension.
+	source_file_name=$(basename "$source") # file.ext
+	source_file_name="${source_file_name%.*}" # file
 
-	destination_folder="${destination_directory%/*}" # /path/folder/file
+	destination_folder="${destination_path%/*}" # /path/folder/file
 	destination_folder="${destination_folder##*/}"	 # folder
 
 	# Clean symbols in source_file_name.
 	renamed_file_name=$source_file_name
-	renamed_file_name=$(echo "$renamed_file_name" | sed 's/\.\./tas_hkas/g') # Replace .. to tas_hkas
-	renamed_file_name=$(echo "$renamed_file_name" | sed 's/\./ /g')	# Replace all . to space.
-	renamed_file_name=$(echo "$renamed_file_name" | sed 's/tas_hkas/./g') # Replace tas_hkas to .
-	renamed_file_name=$(echo "$renamed_file_name" | sed 's/_/ /g')	# Replace all _ to space.
-	renamed_file_name=$(echo "$renamed_file_name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//') # Remove both leading and trailing spaces.
-	renamed_file_name=$(echo "$renamed_file_name" | sed 's/ \+/ /g' ) # Substitute multiple spaces with a single space.
-	renamed_file_name=$(echo "$renamed_file_name" | sed 's#\(.*\) /#\1/#') # Replace last " /" to "/" for TV series directory creation.
+	renamed_file_name=$(echo $renamed_file_name | sed 's/\.\./tas_hkas/g') # Replace .. to tas_hkas
+	renamed_file_name=$(echo $renamed_file_name | sed 's/\./ /g')	# Replace all . to space.
+	renamed_file_name=$(echo $renamed_file_name | sed 's/tas_hkas/./g') # Replace tas_hkas to .
+	renamed_file_name=$(echo $renamed_file_name | sed 's/_/ /g')	# Replace all _ to space.
+	# renamed_file_name=$(echo "$renamed_file_name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//') # Remove both leading and trailing spaces.
+	# renamed_file_name=$(echo "$renamed_file_name" | sed 's/ \+/ /g' ) # Substitute multiple spaces with a single space.
+	renamed_file_name=$(echo $renamed_file_name | sed 's#\(.*\) /#\1/#') # Replace last " /" to "/" for TV series directory creation.
 
 	# Regular expression to match various TV series patterns.
 	series_pattern=$(echo "$renamed_file_name" | grep -Eo "([Ss])([0-9]+)[._ -]?([Ee])([0-9]+)")
 
 	if [ -n "$series_pattern" ]; then
-		for pattern in $series_pattern;do
+		for pattern in $series_pattern; do
 			# If TV series pattern found, normalize it to the "S01E01" format.
 			season=$(echo "$pattern" | sed -E 's/[^0-9]*([0-9]+)[^0-9]+([0-9]+)/\1/')
 			episode=$(echo "$pattern" | sed -E 's/[^0-9]*([0-9]+)[^0-9]+([0-9]+)/\2/')
@@ -216,7 +210,7 @@ convert_file(){
 
 		# Add subfolder for TV series if destination folder not same as source folder.
 		if [ "$destination_folder" != "$source_folder" ]
-		then destination_directory="$destination_directory$source_folder/"
+		then destination_path="$destination_path$source_folder/"
 		fi
 
 		# Check if $renamed_file_name starts with the series pattern.
@@ -232,14 +226,12 @@ convert_file(){
 	else
 		# If no TV series pattern found, keep the original string and search movie pattern.
 		# If destination starts with DEFAULT_TV_SHOWS_DESTINATION change it to DEFAULT_MOVIE_DESTINATION.
-		if echo "$destination_directory" | grep -q "^$DEFAULT_TV_SHOWS_DESTINATION"
-		then destination_directory=$(echo "$destination_directory" | sed "s|$DEFAULT_TV_SHOWS_DESTINATION|$DEFAULT_MOVIE_DESTINATION|g")
+		if [ -n "$DEFAULT_TV_SHOWS_DESTINATION" ] &&  echo "$destination_path" | grep -q "^$DEFAULT_TV_SHOWS_DESTINATION"
+		then destination_path=$(echo "$destination_path" | sed "s|$DEFAULT_TV_SHOWS_DESTINATION|$DEFAULT_MOVIE_DESTINATION|g")
 		fi
 
-		# Assumption that script not run in year change time.
-		if [ -z "$current_year" ]
-		then current_year=$(date +%Y)
-		fi
+		current_year=$(date +%Y)
+
 		# Extract all four-digit numbers from the renamed_file_name and filter out the between 1902 and current_year.
 		for year in $(echo "$renamed_file_name" | grep -oE '[0-9]{4}'); do
 			# First movie was released 1902.
@@ -274,37 +266,37 @@ convert_file(){
 		fi
 
 		# Rename parent movie folder if it same as file name.
-		if [ -f "${source%.*}.nfo" ] || [ -f "$source_directory""movie.nfo" ] || [ "$source_folder" = "$source_file_name" ];then
+		if [ -f "${source%.*}.nfo" ] || [ -f "${source_directory}movie.nfo" ] || [ "$source_folder" = "$source_file_name" ]; then
 			# Add folder if destination not same as source file name and destination.
 			if [ "$source_file_name" != "$destination_folder" ]; then
 				if [ "$destination_folder" != "$destination" ]
-				then destination_directory="$destination_directory$destination/"
+				then destination_path="$destination_path$destination/"
 				fi
 			else
-				# Replace destination_folder with destination.
-				destination_directory=$(echo "$destination_directory" | sed "s/$source_folder/$destination/")
+				# Replace destination_path with destination.
+				destination_path=$(echo "$destination_path" | sed "s/$source_folder/$destination/")
 			fi
 		fi
 	fi
 
 	# Rename destination_folder if it is same as source file name.
 	if [ "$source_file_name" = "$destination_folder" ]; then
-		destination_directory=$(echo "$destination_directory" | sed "s/$destination_folder/$destination/")
+		destination_path=$(echo "$destination_path" | sed "s/$destination_folder/$destination/")
 		destination_folder="$destination"
 	fi
 
 	# Audio file save as .mka in source directory.
 	if $NO_VIDEO_FLAG; then
 		destination_extension="mka"
-		if echo "$destination_directory" | grep -q "^$DEFAULT_TV_SHOWS_DESTINATION"
+		if echo "$destination_path" | grep -q "^$DEFAULT_TV_SHOWS_DESTINATION"
 			then destination="${source%.*}.$destination_extension"
-		elif echo "$destination_directory" | grep -q "^$DEFAULT_MOVIE_DESTINATION"
+		elif echo "$destination_path" | grep -q "^$DEFAULT_MOVIE_DESTINATION"
 			then destination="${source%.*}.$destination_extension"
 		fi
 	fi
 
 	# Destination path + normalized file name + source extension.
-	destination="$destination_directory$destination.$destination_extension"
+	destination="$destination_path$destination.$destination_extension"
 
 	# Select audio tracks based on preferred and fallback languages.
 	for language in $LANGUAGES; do
@@ -496,7 +488,7 @@ convert_file(){
 	unset profesional_subtitle_tracks subrip_subtitle_tracks
 
 	# Import subtitle track title from existing file.
-	if [ -f "$destination" ] && [ -n "$destination_file_streams" ] && [ "$subtitle_tracks_count" -eq "1" ]; then
+	if [ -f "$destination" ] && [ -n "$destination_file_streams" ] && [ "$subtitle_tracks_count" -eq 1 ]; then
 		# Count existing destination subtitles count.
 		destination_subtitle_titles="$(echo "$destination_file_streams" | jq -r --arg lang "$subtitle_language" '.[] | select(.codec_type == "subtitle" and .language == $lang and .title != null) | .title')"
 		destination_subtitle_titles_count=$(echo "$destination_subtitle_titles" | grep -c '[^[:space:]]')
@@ -525,10 +517,10 @@ convert_file(){
 	if [ -n "$commentary_subtitle" ]; then
 		# Select commentary subtitles by languages.
 		for language in $LANGUAGES; do
-			if [ "$language" != "$subtitle_language" ];then
+			if [ "$language" != "$subtitle_language" ]; then
 				commentary_subtitle_tracks=$(echo "$commentary_subtitle" | jq -r --arg lang "$language" '. | select(.language == $lang) | .index')
 				if [ -n "$commentary_subtitle_tracks" ]; then
-					if [ -n "$subtitle_tracks" ];
+					if [ -n "$subtitle_tracks" ]
 					then subtitle_tracks="$subtitle_tracks $commentary_subtitle_tracks"
 					else subtitle_tracks="$commentary_subtitle_tracks"
 					fi
@@ -734,7 +726,7 @@ convert_file(){
 					destination_nfo_file="${destination%.*}$source_nfo_file"
 					source_nfo_file="${source%.*}$source_nfo_file"
 				else
-					destination_nfo_file="$destination_directory$source_nfo_file"
+					destination_nfo_file="$destination_path$source_nfo_file"
 					source_nfo_file="$source_directory$source_nfo_file"
 				fi
 
@@ -817,13 +809,12 @@ convert_file(){
 					kodi_file_destination="${destination%.*}$kodi_file_destination"
 						move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
 						echo "$move_file_command"
-						if ! eval "$move_file_command";then
-							# Record move kodi files error.
-							error "moving \"$kodi_file\" file."
+						if ! error="$(eval "$move_file_command")"
+						then error "$error moving \"$kodi_file\" file."
 						fi
 				done
 				IFS=$SAVE_IFS
-				unset kodi_files kodi_file move_file_command kodi_file_destination SAVE_IFS
+				unset kodi_files kodi_file move_file_command kodi_file_destination SAVE_IFS error
 			fi
 
 			# move kodi files that does not start same as file name.
@@ -848,36 +839,36 @@ convert_file(){
 				-o -name "tvshow-trailers.*" \
 				-o -name "trailer.*" \))
 
-			if [ -n "$kodi_files" ];then
+			if [ -n "$kodi_files" ]; then
 
 				#IFS` determines which characters separate the fields in each line of data.
 				SAVE_IFS=$IFS
 				IFS="$(printf '\n\t')" #Change Internal Field Separator to newline or tab. Why do not work with only '\n'?
 
 				for kodi_file in $kodi_files; do
-					kodi_file_destination="$destination_directory"$(basename "$kodi_file")
+					kodi_file_destination="$destination_path"$(basename "$kodi_file")
 					move_file_command="mv -f \"$kodi_file\" \"$kodi_file_destination\""
 					echo "$move_file_command"
-					if ! eval "$move_file_command"
-					then error "moving \"$kodi_file\" file."
+					if ! error="$(eval "$move_file_command")"
+					then error "$error moving \"$kodi_file\" file."
 					fi
 				done
 				IFS=$SAVE_IFS
-				unset kodi_files kodi_file move_file_command kodi_file_destination SAVE_IFS
+				unset kodi_files kodi_file move_file_command kodi_file_destination SAVE_IFS error
 			fi
 
-			# Move kodi folders.
+			# Move kodi folders with rsync.
 			for kodi_folder in .actors/ trailers/ extrafanart/; do
 				if [ -d "$source_directory$kodi_folder" ]; then
-					move_file_command="rsync -av --remove-source-files \"$source_directory$kodi_folder\" \"$destination_directory$kodi_folder\""
+					move_file_command="rsync -av --remove-source-files \"$source_directory$kodi_folder\" \"$destination_path$kodi_folder\""
 					echo "$move_file_command"
-					if eval "$move_file_command"
-					then rmdir "$source_directory$kodi_folder"
-					else error "moving \"$source_directory$kodi_folder\" folder."
+					if ! error="$(eval "$move_file_command")"
+					then error "$error moving \"$source_directory$kodi_folder\" folder."
+					else rmdir "$source_directory$kodi_folder"
 					fi
 				fi
 			done
-			unset kodi_folder move_file_command
+			unset kodi_folder move_file_command error
 		fi
 	else
 		# Register all successful fmmpeg commands.
@@ -958,26 +949,31 @@ check_file(){
 	# Record the FFmpeg start time.
 	ffmpeg_start_time=$(date +%s)
 
-	#eval ffmpeg -err_detect explode -v error -hide_banner -i \"$1\" -c copy -f null - 2>&1 >/dev/null
+	# Do not show ffmpeg status but catch all errors
+	# eval ffmpeg -err_detect explode -v error -hide_banner -i \"$1\" -c copy -f null - 2>&1 >/dev/null
 	# Run ffmpeg and capture its output and exit status
-	#without video
-	#ffmpeg_output=$(ffmpeg -v error -i "$1" -vn -f null - 2>&1)
-	#ffmpeg_output=$(ffmpeg -v error -xerror -err_detect explode -i "$1" -f null - 2>&1)
-	#ffmpeg -xerror -err_detect explode -hide_banner -i "$1" -f null -
-	#ffmpeg -hwaccels -hide_banner #shows GPU accelerators.
-	#ffmpeg -hwaccel vaapi -vaapi_device /dev/dri/renderD128 -xerror -err_detect explode -hide_banner -i "$1" -f null - #works 10x slower
+	# without video
+	# ffmpeg_output=$(ffmpeg -v error -i "$1" -vn -f null - 2>&1)
+	# ffmpeg_output=$(ffmpeg -v error -xerror -err_detect explode -i "$1" -f null - 2>&1)
+	# ffmpeg -hwaccels -hide_banner #shows GPU accelerators.
 
-# Shows ffmpeg status but do not catch all errors
-# + no hwaccel = 40 fps
-# + vdpau 126 fps
-# + cuda 100 fps
-# + vaapi 39 fps
-# - qsv no hevc
-# - drm no hevc
-# - opencl -hwaccel_device 0 - 40 fps
-# + vulkan 97 fps Unrecognized hwaccel: vulcan
-# + nvdec 120 fps
-	ffmpeg_command="ffmpeg -hide_banner -hwaccel vdpau -xerror -err_detect explode -analyzeduration 2147483647 -probesize 2147483647 -i \"$1\" -f null -" #vdpau works faster than cuda and nvdec.
+	# Enable video decoding hardware accelleration.
+	if [ -z "$hwaccels" ] && [ -z "$hwaccel" ]; then
+		hwaccels=$(ffmpeg -hide_banner -hwaccels)
+		if echo "$hwaccels" | grep cuda
+		then hwaccel=cuda
+		elif echo "$hwaccels" | grep vaapi
+		then hwaccel=vaapi
+		fi
+		unset hwaccels
+	fi
+
+	# Shows ffmpeg status but do not catch all errors
+	if [ -n "$hwaccel" ]
+	then ffmpeg_command="ffmpeg -hide_banner -hwaccel $hwaccel -hwaccel_output_format $hwaccel -xerror -err_detect explode -analyzeduration 2147483647 -probesize 2147483647 -i \"$1\" -f null -"
+	else ffmpeg_command="ffmpeg -hide_banner -xerror -err_detect explode -analyzeduration 2147483647 -probesize 2147483647 -i \"$1\" -f null -"
+	fi
+
 	echo "$ffmpeg_command"
 
 	if ! $TEST_FLAG; then
@@ -1021,32 +1017,30 @@ process_directory() {
 			file_extension=".${path##*.}"
 			for extension in $EXTENSIONS; do
 				if [ "$extension" = "$file_extension" ]; then
-					# Print horizontal file separator line.
-					if [ -n "$job_separator" ]
-					then echo "$job_separator"
-					else
-						# Generate default lenght job separator.
-						job_separator=$(printf '%*s' "$terminal_columns" " " | tr ' ' '-')
+
+					# Change horizontal file separator lenght by terminal width.
+					if [ -n "$terminal_width_command" ]
+					then changed_terminal_width=$(eval "$terminal_width_command")
+						if [ "$terminal_width" -ne "$changed_terminal_width" ]
+						then
+							terminal_width=$changed_terminal_width
+							job_separator=$(printf '%*s' "$changed_terminal_width" " " | tr ' ' '-')
+						fi
 					fi
 
-					# Change job separator lenght by terminal width.
-					if $TPUT_EXIST; then
-						if [ "$(tput cols)" -ne "$terminal_columns" ]; then
-							terminal_columns=$(tput cols)
-							job_separator=$(printf '%*s' "$terminal_columns" " " | tr ' ' '-')
-						fi
+					# Print horizontal file separator line.
+					if [ $processed_files_count -gt 0 ]
+					then echo "$job_separator"
+					else job_separator=$(printf '%*s' "$changed_terminal_width" " " | tr ' ' '-')
 					fi
 
 					# Set same folder for destination as source.
 					directory=$(dirname "$path")
 					folder="${directory#"$user_source_directory"}"
-					if [ "$directory" = "$folder" ]; then
-						unset folder
+					if [ "$directory" = "$folder" ]
+					then unset folder
 					fi
 					unset directory
-
-					# Count processed files.
-					processed_files_count=$(( processed_files_count + 1 ))
 
 					# Determine the operation based on --check parameter.
 					if $CHECK_FLAG; then
@@ -1062,6 +1056,10 @@ process_directory() {
 						convert_file "$path" "$destination"
 						unset destination
 					fi
+
+					# Count processed files.
+					processed_files_count=$(( processed_files_count + 1 ))
+
 				break # Valid extension found.
 				fi
 			done
@@ -1081,10 +1079,11 @@ for program in ffprobe ffmpeg jq; do
 	fi
 done
 
-# Check if exist tput program.
+# tput and ttysize used for terminal width in horizontal job separation.
 if command -v "tput" > /dev/null 2>&1
-then TPUT_EXIST=true
-else TPUT_EXIST=false
+then terminal_width_command="tput cols"
+elif command -v "ttysize" > /dev/null 2>&1
+then terminal_width_command="ttysize | awk '{print \$1}'"
 fi
 
 # Print verbose messages only when not given -h or --help script argument.
@@ -1103,11 +1102,9 @@ VERBOSE_FLAG=false # Print detail messages of constants and variables declaratio
 config_file="$(basename "$0")"
 config_file="./_${config_file%.*}.cfg"
 if [ -f "$config_file" ]
-then . "$config_file"
-else
-	if ! $HELP_FLAG 
-	then printf 'Do not found configuration file %s.\n' "$config_file" >&2
-	fi
+	then . "$config_file"
+elif ! $HELP_FLAG
+	then printf 'Do not found configuration file %s. Using default values.\n' "$config_file" >&2
 fi
 unset config_file
 
@@ -1131,7 +1128,7 @@ set_default_variables "constant string" SUPPORTED_VIDEO_CODECS "h264 hevc av1 vp
 set_default_variables "constant string" SUPPORTED_AUDIO_CODECS "vorbis aac mp3 opus flac" # Do not convert audio with these audio codecs.
 
 # Fallback global variables declaration.
-set_default_variables integer terminal_columns 80 # Terminal text width in symbols. Used when tput not exist.
+set_default_variables integer terminal_width 80 # Terminal text width in symbols. Used when tput or ttysize not exist for job separator lenght.
 #set_default_variables "numerical list" "" # User chosen audio tracks list.
 set_default_variables boolean OVERWRITE_FLAG false # Overwrite media files.
 set_default_variables boolean CHECK_FLAG false # Check files for errors.
@@ -1175,21 +1172,35 @@ while [ $# -gt 0 ]; do
 			echo "  -s, --skip		Skip files that do not need audio/subtitle conversation/removal."
 			echo "  -t, --test		Print only FFmepg commands (dry run)."
 			echo "  -v, --video		Excludes video. Output only audio and subtitles."
-			echo "  --verbose		Print additional config errors"
-			echo "  If no source or destination are provided then defaults are used."
-			echo "  Default source is: $DEFAULT_SOURCE"
-			echo "  Default destination for movies is: $DEFAULT_MOVIE_DESTINATION"
-			echo "  Default destination for TV shows is: $DEFAULT_TV_SHOWS_DESTINATION"
+			echo "  --verbose		Print additional configuration errors."
+			if [ -n "$DEFAULT_SOURCE" ] || [ -n "$DEFAULT_MOVIE_DESTINATION" ] || [ -n "$DEFAULT_TV_SHOWS_DESTINATION" ]
+			then
+				echo "  If no source or destination are provided then defaults are used."
+				if [ -n "$DEFAULT_SOURCE" ]
+				then echo "  Default source is: $DEFAULT_SOURCE"
+				fi
+				if [ -n "$DEFAULT_MOVIE_DESTINATION" ]
+				then echo "  Default destination for movies is: $DEFAULT_MOVIE_DESTINATION"
+				fi
+				if [ -n "$DEFAULT_TV_SHOWS_DESTINATION" ]
+				then echo "  Default destination for TV shows is: $DEFAULT_TV_SHOWS_DESTINATION"
+				fi
+			else echo "  Default source or destination is not set."
+			fi
 			echo "  If one parameter is provided, it is considered as the source."
 			echo "  If two parameters are provided the first is source, second is destination."
 			echo "  Source can be file or directory."
 			echo "  Destination can be only directory."
-			echo "  Supported files extensions: $EXTENSIONS"
-			echo "  Languages selection priority:"
-			for language in $LANGUAGES;do
-				language_number=$((language_number + 1))
-				printf "\t\t\t\t%s\n" "$language_number. $language"
-			done
+			if [ -n "$EXTENSIONS" ]
+			then echo "  Supported files extensions: $EXTENSIONS"
+			fi
+			if [ -n "$LANGUAGES" ]; then
+				echo "  Languages selection priority:"
+				for language in $LANGUAGES;do
+					language_number=$((language_number + 1))
+					printf "\t\t\t\t%s\n" "$language_number. $language"
+				done
+			fi
 			echo "Examples:"
 			echo "  $(basename "$0")			# Use default source and destination."
 			echo "  $(basename "$0") source		# Use specified source and default destination."
@@ -1246,7 +1257,9 @@ done
 unset language script_argument argument_number language
 
 # Confirm if the last character of $input_destination is '/'.
-input_destination=$(confirm_last_character "$destination" "/")
+if [ -n "$destination" ]
+then input_destination=$(confirm_last_character "$destination" "/")
+fi
 
 # Check more file extensions than convert.
 if $CHECK_FLAG; then

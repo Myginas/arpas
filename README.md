@@ -29,11 +29,16 @@ Shell script for batch processing media files
 - Handles both single files and directories (recursively)
 - Automatically organizes files into TV shows or movie folders based on detected patterns
 - Loads settings from optional _arpas.cfg configuration file
-## Requirements
 
-- [ffmpeg](https://ffmpeg.org/)
-- ash (or compatible shell)
+## Requirements:
+
+- ffmpeg (https://ffmpeg.org/)
 - jq (command-line JSON processor)
+
+## Optional:
+
+- xmlstarlet (command-line tool for processing kodi nfo files)
+- rsync (is in kodi virtual.network-tools addon)
 
 ## Usage
 
