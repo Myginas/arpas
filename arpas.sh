@@ -4,10 +4,11 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-07-11]															#
-# Version: [1.9.1]																#
-# Fix: audio selection from console. Remove video titles to file_streams.		#
-#	Tranfer audio title also overwrites destination file.						#
+# Date: [2026-07-15]															#
+# Version: [1.9.2]																#
+# Fix: jq command in Select audio track from first not null language audio track#
+# Destination path + normalized file name + source extension do not overwrite 	#
+# destination when selected output only audio.									#
 #################################################################################
 
 # Function to handle empty variables and set defaults.
@@ -271,10 +272,10 @@ convert_file(){
 		elif echo "$destination_path" | grep -q "^$DEFAULT_MOVIE_DESTINATION"
 			then destination="${source%.*}.$destination_extension"
 		fi
+	else
+		# Destination path + normalized file name + source extension.
+		destination="$destination_path$destination.$destination_extension"
 	fi
-
-	# Destination path + normalized file name + source extension.
-	destination="$destination_path$destination.$destination_extension"
 
 	# Select audio tracks from command line parameters.
 	selected_audio_tracks_count=0
@@ -297,9 +298,8 @@ convert_file(){
 		selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c '[^[:space:]]')
 
 		# Select audio track from first not null language audio track.
-		echo "selected_audio_tracks=$selected_audio_tracks"
 		for selected_audio_track in $selected_audio_tracks; do
-			audio_language=$(echo "$file_streams" | jq -r '.[] | select(.index == $selected_audio_track and .codec_type == "audio" and .language != null) | .language')
+			audio_language=$(echo "$file_streams" | jq -r --arg selected_audio_track "$selected_audio_track" '.[] | select(.index == $selected_audio_track and .codec_type == "audio" and .language != null) | .language')
 			if [ -n "$audio_language" ]
 			then break
 			fi
