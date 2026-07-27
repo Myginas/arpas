@@ -4,11 +4,11 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-07-15]															#
-# Version: [1.9.2]																#
-# Fix: jq command in Select audio track from first not null language audio track#
-# Destination path + normalized file name + source extension do not overwrite 	#
-# destination when selected output only audio.									#
+# Date: [2026-07-20]															#
+# Version: [1.9.3]																#
+# Fix: ffmpeg error output. check function extensions.							#
+#	jq command to select audio track from first not null language audio track.	#
+#	Audio file save as .mka destination directory name creation.				#
 #################################################################################
 
 # Function to handle empty variables and set defaults.
@@ -271,6 +271,7 @@ convert_file(){
 			then destination="${source%.*}.$destination_extension"
 		elif echo "$destination_path" | grep -q "^$DEFAULT_MOVIE_DESTINATION"
 			then destination="${source%.*}.$destination_extension"
+		else destination="$destination_path$destination.$destination_extension"
 		fi
 	else
 		# Destination path + normalized file name + source extension.
@@ -299,7 +300,7 @@ convert_file(){
 
 		# Select audio track from first not null language audio track.
 		for selected_audio_track in $selected_audio_tracks; do
-			audio_language=$(echo "$file_streams" | jq -r --arg selected_audio_track "$selected_audio_track" '.[] | select(.index == $selected_audio_track and .codec_type == "audio" and .language != null) | .language')
+			audio_language=$(echo "$file_streams" | jq -r --arg selected_audio_track "$selected_audio_track" '.[] | select(.index == ($selected_audio_track | tonumber) and .codec_type == "audio" and .language != null) | .language')
 			if [ -n "$audio_language" ]
 			then break
 			fi
@@ -712,10 +713,7 @@ convert_file(){
 			# Record the FFmpeg end time.
 			ffmpeg_end_time=$(date +%s)
 			ffmpeg_run_time=$((ffmpeg_end_time - ffmpeg_start_time))
-			if $allow_run_ffmpeg
-			then error "$ffmpeg_command"
-			else error "$ffmpeg_command" "do not print"
-			fi
+			error "$ffmpeg_command" "do not print"
 			unset ffmpeg_command allow_run_ffmpeg
 			return 1
 		fi
@@ -1288,7 +1286,7 @@ if $CHECK_FLAG; then
 #	# Run ffmpeg -formats and extract the formats
 #	EXTENSIONS=$(ffmpeg -demuxers -hide_banner | tail -n +5 | cut -d' ' -f4 | xargs -i{} ffmpeg -hide_banner -h demuxer={} | grep 'Common extensions' | cut -d' ' -f7 | tr ',' $'\n' | tr -d '.'))
 #	# Because very slow extract formats it is faster use baked variable.
-	EXTENSIONS=".mkv .avi .mp4 .mka .aac .ac3 .mov .mp2 .mp3 .ogg .vc1 .dss .dts .eac3 .flac .flv .hevc .m2a .m4a .m4v .mks .3g2 .3gp .aa3"
+	EXTENSIONS=".mkv .avi .mp4 .m2ts .ts .mka .aac .ac3 .mov .mp2 .mp3 .ogg .vc1 .dss .dts .eac3 .flac .flv .hevc .m2a .m4a .m4v .mks .3g2 .3gp .aa3"
 fi
 
 # audio_track_user_choice is set by script argument or config file.
