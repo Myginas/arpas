@@ -4,11 +4,12 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-07-20]															#
-# Version: [1.9.3]																#
-# Fix: ffmpeg error output. check function extensions.							#
-#	jq command to select audio track from first not null language audio track.	#
-#	Audio file save as .mka destination directory name creation.				#
+# Date: [2026-07-28]															#
+# Version: [2.0.0]																#
+# Fix:  remove buggy Check need of conversation audio or strip some tracks.		#
+#		Transfer audio title from egzisting destination file.					#
+# Add: "dub" as proffessional audio track.										#
+# Change: xmlstarlet existance check.											#
 #################################################################################
 
 # Function to handle empty variables and set defaults.
@@ -209,7 +210,7 @@ convert_file(){
 		then destination_path=$(echo "$destination_path" | sed "s|$DEFAULT_TV_SHOWS_DESTINATION|$DEFAULT_MOVIE_DESTINATION|g")
 		fi
 
-		current_year=$(date +%Y)
+		[ -z "$current_year" ] && current_year=$(date +%Y)
 
 		# Extract all four-digit numbers from the renamed_file_name and filter out the between 1902 and current_year.
 		for year in $(echo "$renamed_file_name" | grep -oE '[0-9]{4}'); do
@@ -274,16 +275,14 @@ convert_file(){
 		else destination="$destination_path$destination.$destination_extension"
 		fi
 	else
-		# Destination path + normalized file name + source extension.
+		# Destination path + normalized file name + extension.
 		destination="$destination_path$destination.$destination_extension"
 	fi
 
 	# Select audio tracks from command line parameters.
 	selected_audio_tracks_count=0
 	if $AUDIO_FLAG; then
-		#selected_audio_tracks=$audio_track_user_choice
 		audio_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio") | .index')"
-
 		# Select only audio tracks from command line parameters.
 		for audio_track in $audio_tracks; do
 			for console_audio_track in $audio_track_user_choice; do
@@ -316,7 +315,7 @@ convert_file(){
 				selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c '[^[:space:]]')
 				if [ "$selected_audio_tracks_count" -gt 1 ]; then
 					# "i" makes the regex case-insensitive. Matches "prof", "Prof", "PROF", etc.
-					profesional_audio_tracks="$(echo "$file_streams" | jq -r --arg lang "$language" '.[] | select(.codec_type == "audio" and .title != null and .language == $lang) | select(.title | test("prof|Проф"; "i")) | .index')"
+					profesional_audio_tracks="$(echo "$file_streams" | jq -r --arg lang "$language" '.[] | select(.codec_type == "audio" and .title != null and .language == $lang) | select((.title | test("prof|Проф"; "i")) or (.title | test("dub|дуб"; "i"))) | .index')"
 					if [ -n "$profesional_audio_tracks" ]; then
 						selected_audio_tracks="$profesional_audio_tracks"
 						selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c '[^[:space:]]')
@@ -348,7 +347,7 @@ convert_file(){
 				echo "⚠️ Found $selected_audio_tracks_count audio tracks of $audio_language language"
 				json_query_command='(["ID:","LANGUAGE:","TITLE:"]), (.['"$json_query_command"'] | [.index, .language, .title]) | @tsv'
 				echo "$file_streams" | jq -r "$json_query_command" | awk -F '\t' '{printf "%-3s %-9s %-0s\n", $1, $2, $3}'
-				unset selected_audio_tracks_count json_query_command
+				unset json_query_command
 
 				# Read user input.
 				echo "Write audio track ID that you want to keep, multiple ID's can be separated by spaces."
@@ -419,7 +418,7 @@ convert_file(){
 			esac
 		fi
 	fi
-	unset source_audio_title destination_audio_titles destination_audio_titles_count
+	unset selected_audio_tracks_count source_audio_title destination_audio_titles destination_audio_titles_count
 
 	# Select all audio tracks if not found preferred and fallback tracks.
 	if [ -z "$selected_audio_tracks" ]; then
@@ -559,8 +558,6 @@ convert_file(){
 
 	# Add audio tracks.
 	destination_audio_track_index=0
-	# Count how much audio and subtitles tracks will be copied without conversation.
-	changed_tracks=0 # changed audio codec or added title to audio/subtitle.
 	for audio_track in $selected_audio_tracks; do
 		audio_codec="$(echo "$file_streams" | jq -r --arg audio_track "$audio_track" '.[$audio_track|tonumber].codec_name')"
 
@@ -582,15 +579,13 @@ convert_file(){
 				ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index $CONVERT_AUDIO_CODEC"
 				# Change codec name for destination screen output.
 				file_streams=$(echo "$file_streams" | jq --arg index "$audio_track" --arg codec_name "$CONVERT_AUDIO_CODEC" '.[] |= if .index == ($index | tonumber) then .codec_name = $codec_name else . end')
-				changed_tracks=$(( changed_tracks + 1 ))
 			fi
 		else ffmpeg_command="$ffmpeg_command -c:a:$destination_audio_track_index copy"
 		fi
 
 		# Change audio title from existing destination file.
-		if [ -n "$source_audio_index" ] && [ "$source_audio_index" -eq "$audio_track" ] && [ -n "$destination_audio_title" ]; then
-			ffmpeg_command="$ffmpeg_command -metadata:s:a:$destination_audio_track_index title=\"$destination_audio_title\""
-			changed_tracks=$(( changed_tracks + 1 ))
+		if [ -n "$source_audio_index" ] && [ "$source_audio_index" -eq "$audio_track" ] && [ -n "$destination_audio_title" ]
+		then ffmpeg_command="$ffmpeg_command -metadata:s:a:$destination_audio_track_index title=\"$destination_audio_title\""
 		fi
 
 		destination_audio_track_index=$(( destination_audio_track_index + 1 ))
@@ -605,34 +600,15 @@ convert_file(){
 			ffmpeg_command="$ffmpeg_command -map 0:$subtitle_track -c:s copy"
 
 			# Change subtitle title from existing destination file.
-			if [ -n "$source_subtitle_index" ] && [ "$source_subtitle_index" -eq "$subtitle_track" ] && [ -n "$destination_subtitles_title" ]; then
-				ffmpeg_command="$ffmpeg_command -metadata:s:s:$destination_subtitle_track_index title=\"$destination_subtitle_title\""
-				changed_tracks=$(( changed_tracks + 1 ))
+			if [ -n "$source_subtitle_index" ] && [ "$source_subtitle_index" -eq "$subtitle_track" ] && [ -n "$destination_subtitles_title" ]
+			then ffmpeg_command="$ffmpeg_command -metadata:s:s:$destination_subtitle_track_index title=\"$destination_subtitle_title\""
 			fi
 			destination_subtitle_track_index=$(( destination_subtitle_track_index + 1 ))
 		done
 		unset subtitle_track destination_subtitle_track_index destination_subtitles_title
 	fi
 
-	# Check need of conversation audio or strip some tracks.
-	if [ "$changed_tracks" -eq 0 ]; then
-		#	Convert files even no changes will be made to file exept renaming and copying to destination.
-		if ! $SKIP_FLAG || $NO_VIDEO_FLAG; then
-			# Copy the file with ffmpeg.
-			if $NO_VIDEO_FLAG; then
-				# Copy without video tracks.
-				ffmpeg_command="-vn -c copy"
-			else
-				# Copy with video tracks.
-				ffmpeg_command="-c copy -metadata:s:v title=\"\""
-			fi
-		else
-			error "Skipping (${1#"$source_directory"}) because do not need to convert this file."
-			unset ffmpeg_command selected_video_tracks selected_audio_tracks subtitle_tracks file_streams
-			return 1
-		fi
-	fi
-
+	# Output destination file information.
 	selected_destination_tracks="$selected_video_tracks $selected_audio_tracks $subtitle_tracks"
 	unset selected_video_tracks selected_audio_tracks subtitle_tracks
 
@@ -646,7 +622,6 @@ convert_file(){
 	done
 	unset selected_destination_track selected_destination_tracks
 
-	# Output destination file information.
 	json_query_command='[ "ID:", "CODEC:", "TYPE:", "LANGUAGE:", "TITLE:"], (.['"$json_query_command] | {index: .index, codec_name: .codec_name, codec_type: .codec_type, language: .language, title: .title} | [.index, .codec_name, .codec_type, .language, .title]) | @tsv"
 	echo
 	echo "Destination file: $destination"
@@ -718,6 +693,7 @@ convert_file(){
 			return 1
 		fi
 		if ! $NO_VIDEO_FLAG; then
+			echo
 			for source_nfo_file in .nfo movie.nfo tvshow.nfo;do
 				# Create source and destination nfo file path.
 				if [ "$source_nfo_file" = ".nfo" ]; then
@@ -730,7 +706,7 @@ convert_file(){
 
 				# Clean source nfo file.
 				if [ -f "$source_nfo_file" ]; then
-					if command -v xmlstarlet > /dev/null 2>&1; then
+					if $XMLSTARLET_EXIST_FLAG; then
 						if xmlstarlet ed \
 						-d '//*[not(node())]' \
 						-d '//videoassettitle' \
@@ -775,19 +751,13 @@ convert_file(){
 						# | `-d '//fileinfo'` | Remove `<fileinfo>` elements. |
 						# | `-d '//source[text()="UNKNOWN"]'` | Remove `<source>` elements with value `UNKNOWN`. |
 
-					else
-						# Print error only one time.
-						# Assume that shell is set that all variables exist and return true.
-						if ! $XMLSTARLET_EXIST_FLAG
-						then error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
-						fi
-						XMLSTARLET_EXIST_FLAG=false
+					else error "xmlstarlet is not installed. Cannot clean $source_nfo_file"
 					fi
 				fi
 			done
 			unset source_nfo_file destination_nfo_file
 
-			# move all kodi files that names begin same as file name.
+			# Move all kodi files that names begin same as file name.
 			escaped_source_file_name=$(echo "$source_file_name" | sed 's/\[/\\[/g')			# Escape [
 			escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\]/\\]/g')	# Escape ]
 			escaped_source_file_name=$(echo "$escaped_source_file_name" | sed 's/\*/\\*/g')	# Escape *
@@ -815,7 +785,7 @@ convert_file(){
 				unset kodi_files kodi_file move_file_command kodi_file_destination SAVE_IFS error
 			fi
 
-			# move kodi files that does not start same as file name.
+			# Move kodi files that does not start same as file name.
 			kodi_files=$(find "$source_directory" -maxdepth 1 -type f \( -name tvshow.nfo \
 				-o -name "poster.*" \
 				-o -name "movie.*" \
@@ -1092,6 +1062,12 @@ for program in ffprobe ffmpeg jq; do
 		exit 1
 	fi
 done
+
+# Check non esential programs for script.
+if command -v xmlstarlet > /dev/null 2>&1
+then XMLSTARLET_EXIST_FLAG=true
+else XMLSTARLET_EXIST_FLAG=false
+fi
 
 # tput and ttysize used for terminal width in horizontal job separation.
 if command -v "tput" > /dev/null 2>&1
