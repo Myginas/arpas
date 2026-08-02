@@ -4,12 +4,10 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-07-28]															#
-# Version: [2.0.0]																#
-# Fix:  remove buggy Check need of conversation audio or strip some tracks.		#
-#		Transfer audio title from egzisting destination file.					#
-# Add: "dub" as proffessional audio track.										#
-# Change: xmlstarlet existance check.											#
+# Date: [2026-07-30]															#
+# Version: [2.1.0]																#
+# Fix:  ffmpeg file overwrite error capture. Output messages logic.				#
+# Add:	warning if not first audio langue is selected.							#
 #################################################################################
 
 # Function to handle empty variables and set defaults.
@@ -381,6 +379,12 @@ convert_file(){
 
 			# Reset audio track choice if not set as script argument.
 			unset audio_track_user_choice
+		# ${LANGUAGES%% *} # The result is the first word of $LANGUAGES.
+		elif [ "$audio_language" != "${LANGUAGES%% *}" ]; then
+			warning="Selected audio language '$audio_language' is not your first '${LANGUAGES%% *}' language"
+			warnings="$warnings$warning in file '$source'\n"
+			printf '\e[38;5;220m! Warning: %s.\e[0m\n' "$warning"
+			unset warning
 		fi
 	fi
 
@@ -637,13 +641,14 @@ convert_file(){
 	ffmpeg_command="-hide_banner -xerror -loglevel warning -stats -analyzeduration 2147483647 -probesize 2147483647 -i \"$source\" $ffmpeg_command \"$destination\""
 
 	# Do not prompt ffmpeg to overwrite existing files.
-	allow_run_ffmpeg=true 
 	if $OVERWRITE_FLAG || [ "$transfer_audio_title_user_choice" = "y" ] || [ "$transfer_audio_title_user_choice" = "Y" ]; then
 		ffmpeg_command="-y $ffmpeg_command"
+		ffmpeg_file_overwrite_error=false
 		unset transfer_audio_title_user_choice
 	# Do not overwrite existing files when skipping files.
-	elif $SKIP_FLAG; then
+	elif [ -f "$destination" ] && $SKIP_FLAG; then
 		ffmpeg_command="-n $ffmpeg_command"
+		ffmpeg_file_overwrite_error=true
 	# Overide ffmpeg interactive file overwrite prompt, because it not return error when select "N".
 	elif [ -f "$destination" ] && ! $TEST_FLAG; then
 		echo
@@ -652,14 +657,15 @@ convert_file(){
 		case "$file_overwrite_user_choice" in
 			y|Y)
 				ffmpeg_command="-y $ffmpeg_command"
-				allow_run_ffmpeg=true
+				ffmpeg_file_overwrite_error=false
 				;;
 			*)
 				ffmpeg_command="-n $ffmpeg_command"
-				allow_run_ffmpeg=false
+				ffmpeg_file_overwrite_error=true
 				;;
 		esac
 		unset file_overwrite_user_choice
+	else ffmpeg_file_overwrite_error=false
 	fi
 
 	ffmpeg_command="ffmpeg $ffmpeg_command"
@@ -669,27 +675,30 @@ convert_file(){
 	# Record the FFmpeg start time also for dry run.
 	ffmpeg_start_time=$(date +%s)
 
-	if ! $TEST_FLAG; then
+	if ! $TEST_FLAG && ! $ffmpeg_file_overwrite_error; then
 		# Create not existing destination directory.
 		output_directory=$(dirname "$destination")
-		if [ ! -d "$output_directory" ] && $allow_run_ffmpeg; then
+		if [ ! -d "$output_directory" ]; then
 			create_directory_command="mkdir -p \"$output_directory\""
 			# Create directory and check for errors.
 			if ! eval "$create_directory_command";then
 				error "FFmpeg cannot create file in not existing directory. Skipping (${source#"$source_directory"}) file."
-				unset allow_run_ffmpeg create_directory_command output_directory
+				unset create_directory_command output_directory
 				return 1
 			fi
 			unset create_directory_command output_directory
 		fi
 
 		# Run FFmpeg command and check FFmpeg errors.
-		if ! eval "$ffmpeg_command" || ! $allow_run_ffmpeg;then
+		if ! eval "$ffmpeg_command" || $ffmpeg_file_overwrite_error;then
 			# Record the FFmpeg end time.
 			ffmpeg_end_time=$(date +%s)
 			ffmpeg_run_time=$((ffmpeg_end_time - ffmpeg_start_time))
-			error "$ffmpeg_command" "do not print"
-			unset ffmpeg_command allow_run_ffmpeg
+			if $ffmpeg_file_overwrite_error
+			then error "Skipping. File '$destination' already exists." "do not print"
+			else error "$ffmpeg_command" "do not print"
+			fi
+			unset ffmpeg_command
 			return 1
 		fi
 		if ! $NO_VIDEO_FLAG; then
@@ -869,8 +878,7 @@ convert_file(){
 	fi
 
 	# Check if the destination file is less than 10% of the source file size.
-	ten_percent=$((source_size / 10))
-	if [ "$destination_size" -lt "$ten_percent" ] || [ "$destination_size" -eq 0 ] && ! $NO_VIDEO_FLAG; then
+	if [ "$destination_size" -lt $((source_size / 10)) ] || [ "$destination_size" -eq 0 ] && ! $NO_VIDEO_FLAG; then
 		error "Destination file (${destination#"$input_destination"}) is less than 10%% of the source file. Deleting it."
 
 		# Delete destination file.
@@ -879,7 +887,6 @@ convert_file(){
 		fi
 		return 1
 	fi
-	unset ten_percent
 
 	# Make destination file modification date same as source.
 	if [ -f "$destination" ]
@@ -1094,7 +1101,7 @@ config_file="./_${config_file%.*}.cfg"
 if [ -f "$config_file" ]
 	then . "$config_file"
 elif ! $HELP_FLAG
-	then printf 'Do not found configuration file %s. Using default values.\n' "$config_file" >&2
+	then printf 'Do not found configuration file %s. Using default values.\n' "$config_file"
 fi
 
 # Overide user VERBOSE_FLAG from config file with user given parameter.
@@ -1310,10 +1317,16 @@ if [ "$processed_files_count" -gt 1 ]; then
 		printf '\e[92m%b\e[0m' "$messages_without_mistakes"
 	fi
 
-	# Output files with errors.
+	# Output warnings
+	if [ -n "$warnings" ]; then
+		echo "$job_separator"
+		printf '! Warnings:\n\e[38;5;220m%b\e[0m' "$warnings"
+	fi
+
+	# Output errors.
 	if [ -n "$errors" ]; then
 		echo "$job_separator"
-		printf 'Files with errors is:\n\e[38;5;196m%b\e[0m' "$errors"
+		printf '⚠️ Errors:\n\e[38;5;196m%b\e[0m' "$errors"
 	fi
 
 	# Record the end time.
@@ -1329,9 +1342,7 @@ if [ "$processed_files_count" -gt 1 ]; then
 		then echo "Dry run for $processed_files_count files took $script_execution_time."
 	elif $CHECK_FLAG
 		then echo "$processed_files_count files check complete in $script_execution_time"
-	elif [ "$total_size_difference" -gt "$size_difference" ]
-		then echo "Total saved: $(human_readable_size "$total_size_difference") and it took $script_execution_time to do so."
 	else
-		echo "Do not saved anything but it took $script_execution_time to do so."
+		echo "Total saved: $(human_readable_size "$total_size_difference") and it took $script_execution_time to do so."
 	fi
 fi
