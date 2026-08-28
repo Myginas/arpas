@@ -4,10 +4,9 @@
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-07-30]															#
-# Version: [2.1.0]																#
-# Fix:  ffmpeg file overwrite error capture. Output messages logic.				#
-# Add:	warning if not first audio langue is selected.							#
+# Date: [2026-08-19]															#
+# Version: [2.1.1]																#
+# Fix: ffmpeg file overwrite error capture.	Audio track split user input 		#
 #################################################################################
 
 # Function to handle empty variables and set defaults.
@@ -364,7 +363,6 @@ convert_file(){
 							then user_selected_audio_tracks="$user_selected_audio_tracks $user_audio_track"
 							else user_selected_audio_tracks="$user_audio_track"
 							fi
-							break 2
 						fi
 					done
 				fi
@@ -527,7 +525,7 @@ convert_file(){
 					then subtitle_tracks="$subtitle_tracks $commentary_subtitle_tracks"
 					else subtitle_tracks="$commentary_subtitle_tracks"
 					fi
-					break
+					break # Adds one language commentary subtitles.
 				fi
 			fi
 		done
@@ -675,18 +673,20 @@ convert_file(){
 	# Record the FFmpeg start time also for dry run.
 	ffmpeg_start_time=$(date +%s)
 
-	if ! $TEST_FLAG && ! $ffmpeg_file_overwrite_error; then
-		# Create not existing destination directory.
-		output_directory=$(dirname "$destination")
-		if [ ! -d "$output_directory" ]; then
-			create_directory_command="mkdir -p \"$output_directory\""
-			# Create directory and check for errors.
-			if ! eval "$create_directory_command";then
-				error "FFmpeg cannot create file in not existing directory. Skipping (${source#"$source_directory"}) file."
+	if ! $TEST_FLAG; then
+		if ! $ffmpeg_file_overwrite_error; then
+			# Create not existing destination directory.
+			output_directory=$(dirname "$destination")
+			if [ ! -d "$output_directory" ]; then
+				create_directory_command="mkdir -p \"$output_directory\""
+				# Create directory and check for errors.
+				if ! eval "$create_directory_command";then
+					error "FFmpeg cannot create file in not existing directory. Skipping (${source#"$source_directory"}) file."
+					unset create_directory_command output_directory
+					return 1
+				fi
 				unset create_directory_command output_directory
-				return 1
 			fi
-			unset create_directory_command output_directory
 		fi
 
 		# Run FFmpeg command and check FFmpeg errors.
