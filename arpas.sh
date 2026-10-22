@@ -1,12 +1,14 @@
-#!/bin/sh
+#!/bin/busybox sh
 # Tab size: 4
 #################################################################################
 # Description:	Script for LibreELEC to remove unnecessary audio and subtitles	#
 #				from media files. Convert not supported audio codecs.			#
 #				Rename files. Move metadata files. Clean nfo files.				#
-# Date: [2026-08-19]															#
-# Version: [2.1.1]																#
-# Fix: ffmpeg file overwrite error capture.	Audio track split user input 		#
+# Date: [2026-10-11]															#
+# Version: [2.2.0]																#
+# Add: parammeter "-a all" to select all audio tracks in automatic selection	#
+# Fix:  debug not show line numbers in dash								 		#
+#		run config file from same directory as script							#
 #################################################################################
 
 # Function to handle empty variables and set defaults.
@@ -278,20 +280,39 @@ convert_file(){
 
 	# Select audio tracks from command line parameters.
 	selected_audio_tracks_count=0
-	if $AUDIO_FLAG; then
+	if $AUDIO_FLAG && [ "$audio_track_user_choice" != "all" ]; then
 		audio_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio") | .index')"
-		# Select only audio tracks from command line parameters.
-		for audio_track in $audio_tracks; do
-			for console_audio_track in $audio_track_user_choice; do
-				if [ "$audio_track" -eq "$console_audio_track" ]; then
-					if [ -n "$selected_audio_tracks" ]
-					then selected_audio_tracks="$selected_audio_tracks $audio_track"
-					else selected_audio_tracks="$audio_track"
+		if [ -n "$audio_tracks" ]; then
+			# Select only existing audio tracks from command line parameters.
+			for audio_track in $audio_tracks; do
+				for console_audio_track in $audio_track_user_choice; do
+					if [ "$audio_track" -eq "$console_audio_track" ]; then
+						if [ -n "$selected_audio_tracks" ]
+						then selected_audio_tracks="$selected_audio_tracks $audio_track"
+						else selected_audio_tracks="$audio_track"
+						fi
 					fi
-				fi
+				done
 			done
-		done
+			if [ -z "$selected_audio_tracks" ]; then 
+				audio_track_user_choice_count=$(echo "$audio_track_user_choice" | grep -c '[^[:space:]]')
+				if [ "$audio_track_user_choice_count" -gt 1 ]
+				then warning="Can not select '$audio_track_user_choice' audio tracks in '$source' file"
+				else warning="Can not select '$audio_track_user_choice' audio track in '$source' file"
+				fi
+				printf '\e[38;5;220m! Warning: %s.\e[0m\n' "$warning"
+				warnings="$warnings$warning\n"
+				unset warning audio_track_user_choice_count
+			fi
+		else 
+			warning="Do not found any audio tracks in '$source' file"
+			printf '\e[38;5;220m! Warning: %s.\e[0m\n' "$warning"
+			warnings="$warnings$warning\n"
+			unset warning
+		fi
+
 		unset audio_track audio_tracks console_audio_track
+
 		selected_audio_tracks_count=$(echo "$selected_audio_tracks" | grep -c '[^[:space:]]')
 
 		# Select audio track from first not null language audio track.
@@ -326,7 +347,7 @@ convert_file(){
 		unset language
 
 		# If more than one selected audio track then ask user select tracks to keep.
-		if [ "$selected_audio_tracks_count" -gt 1 ]; then
+		if [ "$selected_audio_tracks_count" -gt 1 ] && [ "$audio_track_user_choice" != "all" ]; then
 			# Check if -a parameter is given to script.
 			if [ -z "$audio_track_user_choice" ]; then
 				# Construct the jq command dynamically.
@@ -423,29 +444,31 @@ convert_file(){
 	unset selected_audio_tracks_count source_audio_title destination_audio_titles destination_audio_titles_count
 
 	# Select all audio tracks if not found preferred and fallback tracks.
-	if [ -z "$selected_audio_tracks" ]; then
-		# Select all audio tracks if not found preferred languages.
-		selected_audio_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio") | .index')"
-	elif ! $AUDIO_FLAG; then
-		# Or add commentary audio.
-		commentary_audio="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" and .title != null) | select(.title | test("Commentary"; "i"))')"
-		if [ -n "$commentary_audio" ]; then
-			# Select commentary audio by languages.
-			for language in $LANGUAGES; do
-				if [ "$language" = "$audio_language" ]
-				then continue # Do not include same commentary language as audio language.
-				fi
-				commentary_audio_track=$(echo "$commentary_audio" | jq -r --arg lang "$language" '. | select(.language == $lang) | .index')
-				if [ -n "$commentary_audio_track" ]; then
-					if [ -n "$selected_audio_tracks" ]
-					then selected_audio_tracks="$selected_audio_tracks $commentary_audio_track"
-					else selected_audio_tracks="$commentary_audio_track"
+	if ! $AUDIO_FLAG; then 
+		if [ -z "$selected_audio_tracks" ]; then
+			# Select all audio tracks if not found preferred languages.
+			selected_audio_tracks="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio") | .index')"
+		else
+			# Or add commentary audio.
+			commentary_audio="$(echo "$file_streams" | jq -r '.[] | select(.codec_type == "audio" and .title != null) | select(.title | test("Commentary"; "i"))')"
+			if [ -n "$commentary_audio" ]; then
+				# Select commentary audio by languages.
+				for language in $LANGUAGES; do
+					if [ "$language" = "$audio_language" ]
+					then continue # Do not include same commentary language as audio language.
 					fi
-					break # Do not add fall back languages.
-				fi
-			done
+					commentary_audio_track=$(echo "$commentary_audio" | jq -r --arg lang "$language" '. | select(.language == $lang) | .index')
+					if [ -n "$commentary_audio_track" ]; then
+						if [ -n "$selected_audio_tracks" ]
+						then selected_audio_tracks="$selected_audio_tracks $commentary_audio_track"
+						else selected_audio_tracks="$commentary_audio_track"
+						fi
+						break # Do not add fall back languages.
+					fi
+				done
+			fi
+			unset commentary_audio commentary_audio_track
 		fi
-		unset commentary_audio commentary_audio_track
 	fi
 
 	# Select subtitles.
@@ -1053,7 +1076,7 @@ for script_argument in "$@"; do
 		if command -v shellcheck > /dev/null 2>&1
 		then shellcheck "$0"
 		fi
-		[ -n "$LINENO" ] && PS4='$LINENO:'
+		PS4='$LINENO:'
 		set -x
 		break
 	fi
@@ -1097,7 +1120,7 @@ VERBOSE_FLAG=false # Print detail messages of constants and variables declaratio
 
 # Load config variables from file _arpas.cfg
 config_file="$(basename "$0")"
-config_file="./_${config_file%.*}.cfg"
+config_file="$(dirname "$0")/_${config_file%.*}.cfg"
 if [ -f "$config_file" ]
 	then . "$config_file"
 elif ! $HELP_FLAG
@@ -1158,6 +1181,10 @@ while [ $# -gt 0 ]; do
 				fi
 				shift
 			done
+			if [ $# -gt 0 ] && [ "$1" = "all" ]; then 
+				audio_track_user_choice=$1
+				shift
+			fi
 			;;
 		-c|--check)
 			CHECK_FLAG=true
@@ -1168,7 +1195,7 @@ while [ $# -gt 0 ]; do
 			;;
 		-h|--help)
 			echo "Usage:"
-			echo "$(basename "$0") [-a index [index ...]] [-c] [-d] [-o] [-s] [-t] [-v] [source] [destination]"
+			echo "$(basename "$0") [-a index [index ...] [all]] [-c] [-d] [-o] [-s] [-t] [-v] [source] [destination]"
 			echo "  -a, --audio		Specify audio tracks to keep (space-separated list of FFmpeg indexes)."
 			echo "  -c, --check		Checks file for errors."
 			echo "  -d, --debug		Enables script debugging."
@@ -1210,7 +1237,7 @@ while [ $# -gt 0 ]; do
 			echo "  $(basename "$0") /source		# Use specified source and default destination."
 			echo "  $(basename "$0") -c /source		# Check specified source for errors."
 			echo "  $(basename "$0") -a 1 3 /source	# Select 1 and 3 audio tracks. Use specified source and default destination."
-			echo "  $(basename "$0") -v -a 0 /source	# Use specified source and default destination to output all audio tracks (without video and do not prompt user choice)."
+			echo "  $(basename "$0") -v -a all /source	# Use specified source and default destination to output all audio tracks (without video)."
 			echo "  $(basename "$0") -t /source		# Dry run without actual conversation."
 			echo "  $(basename "$0") -s /source /destination/ # Skip files and use specified source and destination."
 			exit

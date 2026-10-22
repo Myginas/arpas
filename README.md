@@ -1,6 +1,6 @@
 # arpas
 
-Shell script for batch processing media files
+Shell script for batch processing media files for LibreELEC
 
 ## Features:
 **Media File Conversion:**
@@ -42,8 +42,8 @@ Shell script for batch processing media files
 
 ## Usage
 
-```sh
-./arpas.sh [OPTIONS] [source] [destination]
+```busybox sh
+busybox sh arpas.sh [OPTIONS] [source] [destination]
 ```
 
 If no parameters are provided, default source and destination are used.
@@ -51,8 +51,8 @@ If you provide a directory, all media files in that directory will be processed.
 
 **Example:**
 
-```bash
-./arpas.sh /path/to/your/videos
+```busybox sh
+busybox sh arpas.sh /path/to/your/videos
 ```
 
 ## Customization
@@ -74,28 +74,33 @@ You can edit `_arpas.cfg` to adjust which codecs or languages to keep. The scrip
 ### Examples
 
 - Use default source and destination:
-  ```sh
-  ./arpas.sh
+  ```busybox sh
+  busybox sh arpas.sh
   ```
 
-- Process a specific file:
-  ```sh
-  ./arpas.sh /path/to/video.mkv /path/to/destination/
+- Process a specific file to specific destination:
+  ```busybox sh
+  busybox sh arpas.sh /path/to/video.mkv /path/to/destination/
   ```
 
-- Process a directory:
-  ```sh
-  ./arpas.sh /path/to/videos/
+- Process a directory to default destination:
+  ```busybox sh
+  busybox sh arpas.sh /path/to/videos/
   ```
 
-- Check a file for errors only:
-  ```sh
-  ./arpas.sh -c /path/to/video.mkv
+- Check a file for errors:
+  ```busybox sh
+  busybox sh arpas.sh -c /path/to/video.mkv
   ```
 
 - Select specific audio tracks:
-  ```sh
-  ./arpas.sh -a 1 3 /path/to/video.mkv /path/to/destination/
+  ```busybox sh
+  busybox sh arpas.sh -a 1 3
+  ```
+
+- Select all audio tracks:
+  ```busybox sh
+  busybox sh arpas.sh -a all
   ```
 
 ## License
